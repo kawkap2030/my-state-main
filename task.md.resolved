@@ -1,0 +1,13 @@
+# Drug Stats App Implementation
+
+- [ ] Initialize Tauri in the Vite React project
+- [ ] Configure Rust backend and SQLite database connection
+- [ ] Implement Rust backend commands for CRUD and validation
+- [ ] Setup React frontend with Tailwind CSS and RTL support
+- [ ] Implement shared HierarchySelector component (Branch -> Area -> Clinic)
+- [ ] Implement Monthly Dispensed module (Free, Supported, Tickets, Supplies)
+- [ ] Implement Insulin Dispensed module
+- [ ] Implement Drug Groups Cost module
+- [ ] Implement Judicial Drugs module
+- [ ] Finalize UI/UX, Navigation and Offline support
+- [ ] Build and Package desktop application

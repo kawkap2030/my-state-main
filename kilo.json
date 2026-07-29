@@ -1,0 +1,11 @@
+﻿{
+  "project": "drug-stats-app",
+  "description": "Tauri + React desktop app for drug statistics management (منصرف الأدوية)",
+  "language": "javascript",
+  "framework": "react",
+  "lintCommand": "npm run lint",
+  "testCommand": "npm run test",
+  "buildCommand": "npm run build",
+  "commandsDir": ".kilo/command",
+  "agentsDir": ".kilo/agent"
+}

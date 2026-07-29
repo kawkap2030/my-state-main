@@ -1,0 +1,474 @@
+# تقرير التدقيق الهندسي المؤسسي
+
+# Enterprise Architecture Audit Report
+
+**المشروع:** نظام إحصائيات الأدوية والمستلزمات الطبية  
+**التاريخ:** 2026-03-02  
+**الحالة الحالية:** Single Page — يتطلب إعادة هيكلة كاملة
+
+---
+
+## المرحلة 1 – Architecture Audit
+
+### ✅ 1. Layered Architecture Validation
+
+| الطبقة              | الحالة الحالية             | المطلوب                                      |
+| ------------------- | -------------------------- | -------------------------------------------- |
+| Presentation Layer  | ❌ مكونات مباشرة بدون فصل  | صفحات مستقلة في `src/pages/`                 |
+| Routing Layer       | ❌ غير موجود (Single Page) | React Router في `src/router/`                |
+| Layout Layer        | ❌ غير موجود               | `AppLayout` مع Sidebar + Navbar + Breadcrumb |
+| Module Layer        | ⚠️ جزئي (forms فقط)        | كل محور في مجلد مستقل `src/modules/`         |
+| Shared Components   | ⚠️ [HierarchySelector](file:///e:/Ahmed69/My%20Stats/drug-stats-app/src/components/common/HierarchySelector.jsx#5-154) فقط | مكتبة مشتركة كاملة في `src/components/`      |
+| Tauri Command Layer | ✅ موجود                   | `src/api/tauriApi.js` — يحتاج توسعة          |
+| Rust Business Layer | ✅ موجود                   | `src-tauri/src/commands/`                    |
+| Data Access Layer   | ✅ موجود                   | `src-tauri/src/db.rs`                        |
+| Database Layer      | ✅ موجود                   | SQLite عبر `rusqlite`                        |
+
+**النتيجة:** ❌ فشل — 4 طبقات غير موجودة أو ناقصة
+
+---
+
+### ✅ 2. Module Isolation Audit
+
+| المحور                             | معزول؟ | ملاحظات                   |
+| ---------------------------------- | ------ | ------------------------- |
+| Monthly Dispensed                  | ❌     | مكون form داخل مجلد مشترك |
+| Insulin Dispensed                  | ❌     | نفس المشكلة               |
+| Drug Groups                        | ❌     | نفس المشكلة               |
+| Judicial Dispensed                 | ❌     | نفس المشكلة               |
+| Hierarchy (Branches/Areas/Clinics) | ❌     | لا توجد صفحات CRUD مستقلة |
+
+**استراتيجية العزل المطلوبة:**
+
+```
+src/modules/
+├── monthly-dispensed/    ← صفحة مستقلة + مكونات خاصة
+├── insulin/              ← صفحة مستقلة + مكونات خاصة
+├── drug-groups/          ← صفحة مستقلة + مكونات خاصة
+├── judicial/             ← صفحة مستقلة + مكونات خاصة
+├── hierarchy/            ← إدارة الفروع/المناطق/العيادات (CRUD كامل)
+└── dashboard/            ← لوحة المعلومات
+```
+
+كل Module يحتوي على: `Page.jsx` + `components/` + `hooks/` (إن لزم)
+
+**النتيجة:** ❌ فشل — لا يوجد عزل
+
+---
+
+### ✅ 3. Navigation Governance Audit
+
+| البند             | الحالة                           |
+| ----------------- | -------------------------------- |
+| Sidebar           | ❌ غير موجود                     |
+| تقسيم Modules     | ❌ Tabs فقط في صفحة واحدة        |
+| Route Registry    | ❌ غير موجود                     |
+| صفحات مستقلة      | ❌ كل شيء في App.jsx             |
+| Single Page ممنوع | ❌ **النظام حالياً Single Page** |
+
+**Route Registry المطلوب:**
+
+| المسار                   | الصفحة             | Module            |
+| ------------------------ | ------------------ | ----------------- |
+| `/`                      | لوحة المعلومات     | dashboard         |
+| `/hierarchy/branches`    | إدارة الفروع       | hierarchy         |
+| `/hierarchy/areas`       | إدارة المناطق      | hierarchy         |
+| `/hierarchy/clinics`     | إدارة العيادات     | hierarchy         |
+| `/monthly-dispensed`     | المنصرف الشهري     | monthly-dispensed |
+| `/monthly-dispensed/new` | إدخال جديد         | monthly-dispensed |
+| `/insulin`               | منصرف الإنسولين    | insulin           |
+| `/insulin/new`           | إدخال جديد         | insulin           |
+| `/drug-groups`           | المجموعات الدوائية | drug-groups       |
+| `/drug-groups/new`       | إدخال جديد         | drug-groups       |
+| `/judicial`              | أحكام المحكمة      | judicial          |
+| `/judicial/new`          | إدخال جديد         | judicial          |
+| `/reports`               | التقارير           | reports           |
+
+**النتيجة:** ❌ فشل مباشر — Single Page
+
+---
+
+### ✅ 4. Wireframe Compliance Audit
+
+**Wireframes المطلوبة لكل نوع صفحة:**
+
+#### Dashboard Page
+
+```
+┌─────────────────────────────────────────────────┐
+│  Navbar  [شعار]  [عنوان]            [إعدادات]  │
+├──────┬──────────────────────────────────────────┤
+│      │  Breadcrumb: الرئيسية                    │
+│  S   │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐   │
+│  i   │  │ إجمالي│ │إنسولين│ │مجموعات│ │ قضائي │   │
+│  d   │  │المنصرف│ │  📊  │ │  📊  │ │  📊  │   │
+│  e   │  └──────┘ └──────┘ └──────┘ └──────┘   │
+│  b   │  ┌────────────────────────────────────┐ │
+│  a   │  │       رسم بياني شهري               │ │
+│  r   │  └────────────────────────────────────┘ │
+│      │  ┌──────────────┐ ┌──────────────────┐ │
+│      │  │ آخر الإدخالات │ │ إحصائيات سريعة  │ │
+│      │  └──────────────┘ └──────────────────┘ │
+└──────┴──────────────────────────────────────────┘
+```
+
+#### CRUD List Page (مثال: إدارة الفروع)
+
+```
+┌─────────────────────────────────────────────────┐
+│  Navbar                                          │
+├──────┬──────────────────────────────────────────┤
+│      │  Breadcrumb: الرئيسية > الهيكل > الفروع  │
+│  S   │  ┌────────────┐      [+ إضافة فرع جديد]  │
+│  i   │  │ بحث...     │                           │
+│  d   │  └────────────┘                           │
+│  e   │  ┌────┬────────────┬─────────────────┐   │
+│  b   │  │ #  │ اسم الفرع  │ إجراءات         │   │
+│  a   │  ├────┼────────────┼─────────────────┤   │
+│  r   │  │ 1  │ الرئيسي    │ [تعديل] [حذف]  │   │
+│      │  │ 2  │ الشمالي    │ [تعديل] [حذف]  │   │
+│      │  └────┴────────────┴─────────────────┘   │
+│      │              [1] [2] [3] →                │
+└──────┴──────────────────────────────────────────┘
+```
+
+#### Transaction Entry Page (مثال: المنصرف الشهري)
+
+```
+┌─────────────────────────────────────────────────┐
+│  Navbar                                          │
+├──────┬──────────────────────────────────────────┤
+│      │  Breadcrumb: الرئيسية > المنصرف الشهري   │
+│  S   │  ┌──────────────────────────────────────┐│
+│  i   │  │ HierarchySelector + MonthPicker      ││
+│  d   │  └──────────────────────────────────────┘│
+│  e   │                                          │
+│  b   │  ── الأدوية المجانية ──────────────────  │
+│  a   │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐   │
+│  r   │  │هيئة  │ │طلبة  │ │رضع   │ │معيلات│   │
+│      │  └──────┘ └──────┘ └──────┘ └──────┘   │
+│      │                                          │
+│      │  ── الأدوية المدعّمة ──────────────────  │
+│      │  ┌──────────┐ ┌──────────┐ ...          │
+│      │  │قيمة الهيئة│ │حصة المريض│              │
+│      │  └──────────┘ └──────────┘              │
+│      │                                          │
+│      │  [ملاحظات...]                            │
+│      │  [          حفظ           ]              │
+└──────┴──────────────────────────────────────────┘
+```
+
+#### Reporting Page
+
+```
+┌─────────────────────────────────────────────────┐
+│  Navbar                                          │
+├──────┬──────────────────────────────────────────┤
+│      │  Breadcrumb: الرئيسية > التقارير         │
+│  S   │  ┌─────────────────────────────────────┐ │
+│  i   │  │ فلاتر: [نوع التقرير] [الفترة]      │ │
+│  d   │  │        [الفرع] [المنطقة] [العيادة]  │ │
+│  e   │  └─────────────────────────────────────┘ │
+│  b   │  ┌─────────────────────────────────────┐ │
+│  a   │  │         جدول البيانات               │ │
+│  r   │  │         + إجماليات                  │ │
+│      │  └─────────────────────────────────────┘ │
+│      │          [تصدير PDF] [تصدير Excel]       │
+└──────┴──────────────────────────────────────────┘
+```
+
+**النتيجة:** ✅ مقبول (تم تقديم Wireframes)
+
+---
+
+## المرحلة 2 – Data Governance Audit
+
+### ✅ 5. Database Design Validation
+
+| البند                 | الحالة  | ملاحظات                                                  |
+| --------------------- | ------- | -------------------------------------------------------- |
+| Naming Conventions    | ✅      | `snake_case` متسق                                        |
+| Primary Keys          | ✅      | `id INTEGER PRIMARY KEY AUTOINCREMENT` في كل جدول        |
+| Foreign Keys          | ✅      | معرّفة مع `ON DELETE CASCADE`                            |
+| Referential Integrity | ✅      | `PRAGMA foreign_keys = ON` مفعّل في `db.rs`              |
+| Audit Fields          | ⚠️ جزئي | `created_at` موجود، لا يوجد `updated_at` أو `created_by` |
+| Soft Delete           | ❌      | غير موجود — الحذف فيزيائي                                |
+
+> [!WARNING]
+> قاعدة البيانات الحالية لا تحتوي على `updated_at` ولا `soft delete`. بحسب تعليمات المستخدم **ممنوع تعديل الجداول**، لذا سيتم العمل بالهيكل الحالي كما هو.
+
+**النتيجة:** ⚠️ مقبول مشروط (لا يمكن تعديل الجداول بحسب التعليمات)
+
+---
+
+### ✅ 6. Transaction Integrity Audit
+
+| البند              | الحل                                                         |
+| ------------------ | ------------------------------------------------------------ |
+| منع الإدخال المكرر | فحص `UNIQUE(clinic_id, dispense_month)` في Rust قبل INSERT   |
+| صحة الربط الهرمي   | التحقق أن `clinic.area_id` ينتمي للـ `area.branch_id` المحدد |
+| Monthly Closing    | فحص وجود سجل للشهر/العيادة قبل السماح بإدخال جديد            |
+| موقع Validation    | **مزدوج**: React (UX) + Rust (أمان)                          |
+
+**النتيجة:** ✅ مقبول (مع التنفيذ)
+
+---
+
+## المرحلة 3 – UI/UX Governance Audit
+
+### ✅ 7. Layout Compliance
+
+| البند               | الحالة الحالية | المطلوب                               |
+| ------------------- | -------------- | ------------------------------------- |
+| Top Navbar          | ⚠️ بسيط جداً   | Navbar ثابت مع شعار + عنوان + إعدادات |
+| Sidebar Collapsible | ❌ غير موجود   | Sidebar قابل للطي مع أقسام مجمّعة     |
+| Breadcrumb          | ❌ غير موجود   | مكون Breadcrumb ديناميكي              |
+| Page Header ثابت    | ❌ غير موجود   | عنوان الصفحة + وصف + أزرار إجراء      |
+
+**النتيجة:** ❌ فشل — يحتاج Layout كامل
+
+---
+
+### ✅ 8. Design System Compliance
+
+| البند                   | الحالة                                  |
+| ----------------------- | --------------------------------------- |
+| Color System            | ✅ معرّف في `index.css` (CSS Variables) |
+| Spacing System          | ⚠️ Tailwind defaults فقط                |
+| Card Pattern            | ✅ `.neu-card` معرّف                    |
+| Table Pattern           | ❌ غير موجود                            |
+| Form Validation Pattern | ❌ فقط رسائل نصية بسيطة                 |
+| Loading States          | ⚠️ Spinner فقط على الزر                 |
+| Error States            | ⚠️ Alert بسيط                           |
+| Toast System            | ❌ غير موجود                            |
+
+**مكونات Design System المطلوبة:**
+
+```
+src/components/
+├── ui/
+│   ├── Button.jsx         ← أزرار موحدة (primary/cta/danger/ghost)
+│   ├── Card.jsx           ← بطاقة neumorphic
+│   ├── Input.jsx          ← حقل إدخال مع تسمية وخطأ
+│   ├── Select.jsx         ← قائمة منسدلة موحدة
+│   ├── Table.jsx          ← جدول بيانات مع فرز وترقيم
+│   ├── Modal.jsx          ← نافذة حوارية
+│   ├── Toast.jsx          ← إشعارات
+│   ├── Breadcrumb.jsx     ← مسار التنقل
+│   ├── PageHeader.jsx     ← رأس الصفحة
+│   ├── Skeleton.jsx       ← حالة التحميل
+│   └── EmptyState.jsx     ← حالة فارغة
+├── layout/
+│   ├── AppLayout.jsx      ← الهيكل العام (Sidebar + Navbar + Content)
+│   ├── Sidebar.jsx        ← القائمة الجانبية
+│   └── Navbar.jsx         ← الشريط العلوي
+└── common/
+    └── HierarchySelector.jsx  ← مشترك بين كل محاور الإدخال
+```
+
+**النتيجة:** ❌ فشل — يحتاج Design System مكتمل
+
+---
+
+## المرحلة 4 – Security & Stability Audit
+
+### ✅ 9. Tauri Security Audit
+
+| البند                | الحالة                       |
+| -------------------- | ---------------------------- |
+| Tauri Commands فقط   | ✅ كل الوصول عبر `invoke()`  |
+| منع وصول الملفات     | ✅ Tauri Scoped Permissions  |
+| SQLite داخل Rust فقط | ✅ `rusqlite` في Backend فقط |
+| منع API Server خارجي | ✅ لا يوجد أي Server         |
+
+**النتيجة:** ✅ مقبول
+
+---
+
+### ✅ 10. Error Handling Audit
+
+| البند                | الحالة | المطلوب                                          |
+| -------------------- | ------ | ------------------------------------------------ |
+| Global Error Handler | ❌     | ErrorBoundary في React + Global catch            |
+| Toast Notification   | ❌     | مكون Toast مع أنواع (success/error/warning/info) |
+| Logging Strategy     | ✅     | `tauri-plugin-log` مفعّل                         |
+
+**النتيجة:** ❌ فشل — يحتاج Toast + ErrorBoundary
+
+---
+
+## المرحلة 5 – Code Governance Plan
+
+### Folder Structure الرسمي
+
+```
+drug-stats-app/
+├── src/
+│   ├── api/
+│   │   └── tauriApi.js              ← طبقة التواصل مع Tauri
+│   │
+│   ├── components/
+│   │   ├── ui/                      ← مكونات Design System
+│   │   │   ├── Button.jsx
+│   │   │   ├── Card.jsx
+│   │   │   ├── Input.jsx
+│   │   │   ├── Select.jsx
+│   │   │   ├── Table.jsx
+│   │   │   ├── Modal.jsx
+│   │   │   ├── Toast.jsx
+│   │   │   ├── Breadcrumb.jsx
+│   │   │   ├── PageHeader.jsx
+│   │   │   ├── Skeleton.jsx
+│   │   │   └── EmptyState.jsx
+│   │   ├── layout/
+│   │   │   ├── AppLayout.jsx
+│   │   │   ├── Sidebar.jsx
+│   │   │   └── Navbar.jsx
+│   │   └── common/
+│   │       └── HierarchySelector.jsx
+│   │
+│   ├── modules/
+│   │   ├── dashboard/
+│   │   │   └── DashboardPage.jsx
+│   │   ├── hierarchy/
+│   │   │   ├── BranchesPage.jsx
+│   │   │   ├── AreasPage.jsx
+│   │   │   ├── ClinicsPage.jsx
+│   │   │   └── components/
+│   │   ├── monthly-dispensed/
+│   │   │   ├── MonthlyListPage.jsx
+│   │   │   ├── MonthlyEntryPage.jsx
+│   │   │   └── components/
+│   │   ├── insulin/
+│   │   │   ├── InsulinListPage.jsx
+│   │   │   ├── InsulinEntryPage.jsx
+│   │   │   └── components/
+│   │   ├── drug-groups/
+│   │   │   ├── DrugGroupsListPage.jsx
+│   │   │   ├── DrugGroupsEntryPage.jsx
+│   │   │   └── components/
+│   │   ├── judicial/
+│   │   │   ├── JudicialListPage.jsx
+│   │   │   ├── JudicialEntryPage.jsx
+│   │   │   └── components/
+│   │   └── reports/
+│   │       └── ReportsPage.jsx
+│   │
+│   ├── router/
+│   │   └── index.jsx                ← Route Registry
+│   │
+│   ├── hooks/
+│   │   ├── useToast.js
+│   │   └── useHierarchy.js
+│   │
+│   ├── App.jsx                      ← Router + ErrorBoundary فقط
+│   ├── main.jsx
+│   └── index.css                    ← Design System Tokens
+│
+├── src-tauri/
+│   ├── src/
+│   │   ├── main.rs
+│   │   ├── lib.rs                   ← تسجيل كل Commands
+│   │   ├── db.rs                    ← اتصال SQLite
+│   │   └── commands/
+│   │       ├── mod.rs
+│   │       ├── hierarchy.rs         ← CRUD فروع/مناطق/عيادات
+│   │       ├── monthly_dispensed.rs
+│   │       ├── insulin_dispensed.rs
+│   │       ├── drug_groups.rs
+│   │       └── judicial_dispensed.rs
+│   ├── Cargo.toml
+│   └── tauri.conf.json
+│
+├── current_schema.sql               ← مرجع قاعدة البيانات (لا يُعدّل)
+├── package.json
+└── vite.config.js
+```
+
+### Naming Conventions
+
+| النوع            | الاتفاقية            | مثال                   |
+| ---------------- | -------------------- | ---------------------- |
+| مجلدات           | `kebab-case`         | `monthly-dispensed/`   |
+| React Components | `PascalCase`         | `MonthlyEntryPage.jsx` |
+| Hooks            | `camelCase` مع `use` | `useToast.js`          |
+| Rust files       | `snake_case`         | `monthly_dispensed.rs` |
+| CSS classes      | `kebab-case`         | `.neu-card`            |
+| CSS variables    | `--kebab-case`       | `--color-primary`      |
+
+### Component Structure Policy
+
+كل مكون UI يتبع هذا النمط:
+
+- Props واضحة مع JSDoc
+- لا يتم `invoke` Tauri مباشرة من مكون UI — يتم من Page فقط
+- المكونات المشتركة لا تعرف عن أي Module محدد
+
+### State Management Strategy
+
+- **Local State** (`useState`): لكل Form ونموذج إدخال
+- **Lifted State**: `HierarchySelector` يرفع الاختيار للصفحة الأب
+- **No Global State Manager**: لا حاجة لـ Redux/Zustand — الحجم لا يتطلب ذلك
+- **URL State**: React Router params للتنقل بين السجلات
+
+---
+
+## المرحلة 6 – Executive Summary
+
+| البند               | الحالة                           | القرار                        |
+| ------------------- | -------------------------------- | ----------------------------- |
+| **Architecture**    | 4 طبقات ناقصة                    | ❌ **Not Approved**           |
+| **Data Governance** | DB سليمة + تعديلات مخططة | ✅ **Approved** |
+| **UI Governance**   | لا Sidebar، لا Tables، لا Toast  | ❌ **Not Approved**           |
+| **Security**        | Tauri Commands آمنة              | ✅ **Approved**               |
+
+### 🔴 Ready For Implementation: **NO — يتطلب إعادة هيكلة أولاً**
+
+---
+
+## خطة التنفيذ المقترحة (بعد الموافقة)
+
+### المرحلة F — البرمجة التشغيلية (CRUD & Business Logic)
+
+16. **تفعيل عمليات الهيكل التنظيمي (Hierarchy Operations)**:
+    - [ ] إضافة أوامر Rust: `add_branch`, `update_branch`, `delete_branch`
+    - [ ] إضافة أوامر Rust: `add_area`, `update_area`, `delete_area`
+    - [ ] إضافة أوامر Rust: `add_clinic`, `update_clinic`, `delete_clinic`
+17. **تفعيل عمليات البيانات الأساسية (Master Data)**:
+    - [ ] إضافة وتعديل الأدوية (Drugs & Categories)
+    - [ ] إضافة وتعديل الإنسولين (Insulin Types & Codes)
+    - [ ] إضافة وتعديل المستلزمات (Supplies)
+18. **تفعيل البحث والفلترة (Advanced Filtering)**:
+    - [ ] بناء أوامر Rust للبحث المتقدم في كافة جداول المنصرف.
+    - [ ] إضافة إمكانية التصدير (PDF/Excel) للنتائج.
+### المرحلة G — توحيد البيانات والاستمرارية (Persistence & Consolidation)
+
+20. **توحيد مصدر البيانات**:
+    - [ ] إضافة تنبيه بصري في `tauriApi.js` عند العمل في "وضع المتصفح" لتجنب الخلط مع التطبيق الحقيقي.
+    - [ ] إظهار المسار المطلق لقاعدة البيانات في "Terminal" عند بدء التشغيل للتأكد من مكانها.
+21. **تفعيل استرجاع البيانات (Data Recovery)**:
+    - [ ] إضافة أوامر Rust: `get_monthly_drugs_dispensed` لاسترجاع ما تم حفظه.
+    - [ ] إضافة أوامر Rust: `get_insulin_dispensed` لاسترجاع بيانات الإنسولين.
+    - [ ] ربط المكونات (`MonthlyDispensedForm`, `InsulinDispensedForm`) بهذه الأوامر عند اختيار العيادة والشهر.
+    - [ ] التأكد من أن زر "حفظ" يقوم بعملية (Update) إذا كانت البيانات موجودة مسبقاً بدلاً من (Insert) مكرر.
+
+### المرحلة H — توحيد التسميات (Naming Convergence - Case Fix)
+
+22. **إصلاح تضارب الأسماء (CamelCase to snake_case)**:
+    - [ ] تحديث كافة استدعاءات `invoke` في `HierarchySelector.jsx` لتمرير `branch_id` و `area_id`.
+    - [ ] تحديث استدعاءات `invoke` في كافة المستندات (Monthly, Insulin, Judicial) لتطابق معاملات Rust.
+    - [ ] تعديل `tauriApi.js` (Mock Data) لتدعم المسميات الجديدة بـ `snake_case`.
+    - [ ] تبسيط عملية الـ Import في `tauriApi.js` لضمان عملها بشكل ثابت في كافة البيئات.
+
+### Automated Tests
+
+- `npm run build` — يجب أن ينجح بدون أخطاء (0 errors)
+
+### Manual Verification (يحتاج تأكيد المستخدم)
+
+1. فتح التطبيق عبر `npm run dev` ← التأكد من ظهور Sidebar
+2. النقر على عنصر "الفروع" ← تجربة إضافة فرع جديد والتأكد من ظهوره في الجدول.
+3. تجربة تعديل اسم الفرع وحذفه.
+4. إدخال بيانات في نموذج المنصرف الشهري ← التأكد من حفظها بنجاح وعرضها في قائمة "آخر العمليات".
+5. التأكد من ظهور Breadcrumb في كل صفحة وتجربة زر "العودة للرئيسية".
+6. تجربة فلاتر البحث في صفحة التقارير (اختياري حالياً).

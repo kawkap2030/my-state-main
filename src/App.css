@@ -1,0 +1,86 @@
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}
+
+/* ── Group Collapse/Expand Animation (real slide-up/down) ─────────────── */
+tr.group-collapsed {
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: scaleY(0);
+  transform-origin: top center;
+  transition: all 0.35s ease-in-out;
+}
+
+tr.group-expanded {
+  opacity: 1;
+  max-height: 2000px;
+  transform: scaleY(1);
+  transform-origin: top center;
+  transition: all 0.35s ease-in-out;
+}
+
+/* Shrink td padding when row is collapsed for a true slide-up feel */
+tr.group-collapsed td {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  border-bottom-width: 0 !important;
+  transition: padding 0.35s ease-in-out, border 0.35s ease-in-out;
+}
+
+tr.group-expanded td {
+  transition: padding 0.35s ease-in-out, border 0.35s ease-in-out;
+}
+
+/* Collapse child content inside td for max-height animation */
+tr.group-collapsed td > * {
+  max-height: 0 !important;
+  overflow: hidden !important;
+  transition: max-height 0.35s ease-in-out;
+}
+
+tr.group-expanded td > * {
+  max-height: 2000px;
+  overflow: visible;
+  transition: max-height 0.35s ease-in-out;
+}
