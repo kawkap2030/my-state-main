@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import PageHeader from "../../../components/ui/PageHeader";
 import Breadcrumb from "../../../components/ui/Breadcrumb";
 import HierarchySelector from "../../../components/common/HierarchySelector";
 import Card from "../../../components/ui/Card";
 import Button from "../../../components/ui/Button";
+import ConfirmModal from "../../../components/ui/ConfirmModal";
 import Input from "../../../components/ui/Input";
 import Select from "../../../components/ui/Select";
 import Table from "../../../components/ui/Table";
@@ -38,7 +39,6 @@ import {
    Baby,
    Layers,
    Copy,
-   User,
 } from "lucide-react";
 import Pagination from "../../../components/ui/Pagination";
 import useKeyboardShortcuts from "../../../hooks/useKeyboardShortcuts";
@@ -46,12 +46,14 @@ import PrintableTable from "../../../components/common/PrintableTable";
 import useReportSignatures from "../../../hooks/useReportSignatures";
 import StatsBar from "../../../components/common/StatsBar";
 import ExportMenu from "../../../components/ui/ExportMenu";
+import { executePrint } from "../../../utils/exportPrint";
 import MedicalTicketsGridEntry from "../../../components/forms/MedicalTicketsGridEntry";
+import useLockGuard from "../../../hooks/useLockGuard";
 
 const MedicalTicketsPage = () => {
   const { user } = useAuth();
   const { hierarchyNames, activeHierarchy, checkIsMonthLocked } = useGlobalApp();
-  const { signatures } = useReportSignatures();
+  const { signatures, loadSignatures: ensureSignaturesLoaded } = useReportSignatures();
   const toast = useToast();
   const location = useLocation();
 
@@ -63,6 +65,8 @@ const MedicalTicketsPage = () => {
     dispenseMonth:
       location.state?.dispenseMonth || activeHierarchy.dispenseMonth || new Date().toISOString().substring(0, 7),
   });
+
+  const { isLocked, LockBanner } = useLockGuard(hierarchy.dispenseMonth);
 
   const [isLocationFixed, setIsLocationFixed] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -77,6 +81,13 @@ const MedicalTicketsPage = () => {
   const [records, setRecords] = useState([]);
   const [, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pendingConflict, setPendingConflict] = useState(null);
+  // Set to true whenever the user EDITS the monthly form. Consumed by
+  // requestEntryModeSwitch: if the monthly form was changed since the last
+  // weekly↔monthly carry, the monthly value is authoritative and overwrites
+  // the weekly split on return (otherwise the original صباحي/مسائي split is
+  // preserved through a plain round-trip).
+  const monthlyEditedRef = useRef(false);
 
   // حالة البحث والترقيم
   const [currentPageOwned, setCurrentPageOwned] = useState(1);
@@ -99,32 +110,35 @@ const MedicalTicketsPage = () => {
     morning_authority: "",
     morning_students: "",
     morning_infants: "",
-    morning_woman: "",
     evening_authority: "",
     evening_students: "",
     evening_infants: "",
-    evening_woman: "",
   });
 
   const [monthlyForm, setMonthlyForm] = useState([
-    { week: 1, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "", woman: "" },
-    { week: 2, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "", woman: "" },
-    { week: 3, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "", woman: "" },
-    { week: 4, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "", woman: "" },
+    { week: 1, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+    { week: 2, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+    { week: 3, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+    { week: 4, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
   ]);   
   useEffect(() => {
-    if (hierarchy.branchId) loadRecords();
+    // Load records whenever a month is selected — branchId may be empty in
+    // "all branches" mode, in which case the backend returns every branch.
+    if (hierarchy.dispenseMonth) loadRecords();
   }, [hierarchy, isSupported]); // eslint-disable-line react-hooks/exhaustive-deps
 
   
   const loadRecords = async () => {
-    if (!hierarchy.branchId || isNaN(parseInt(hierarchy.branchId))) {
+    if (!hierarchy.dispenseMonth) {
       return;
     }
     setLoading(true);
     try {
       const data = await invoke("get_medical_tickets_report", {
-        branchId: parseInt(hierarchy.branchId),
+        branchId:
+          hierarchy.branchId && !isNaN(parseInt(hierarchy.branchId))
+            ? parseInt(hierarchy.branchId)
+            : null,
         areaId: null,
         clinicId: null,
         dispenseMonth: hierarchy.dispenseMonth,
@@ -137,31 +151,166 @@ const MedicalTicketsPage = () => {
     }
   };
 
+  // ── Shared save + duplicate/overwrite guard (mirrors quick entry) ──────
+  // Builds a payload once, then either saves it directly or — when a period
+  // was already entered with DIFFERENT values, or a عام entry would silently
+  // wipe per-category rows (and vice versa) — asks the user for consent via
+  // the "استبدال البيانات" confirmation modal before overwriting.
+  const performSave = async (payload, { successMsg, logDetails, resetFn }) => {
+    setSaving(true);
+    try {
+      await invoke("save_medical_tickets_bulk", { data: payload });
+
+      await invoke('log_frontend_action', {
+        userId: user ? user.id : null,
+        action: 'BULK_UPDATE',
+        tableName: 'medical_tickets',
+        recordId: null,
+        details: logDetails
+      });
+
+      toast.success(successMsg);
+      loadRecords();
+      if (resetFn) resetFn();
+    } catch (err) {
+      // Surface the real backend message (e.g. the triple-isolation lock
+      // error "هذا الشهر مقفل على مستوى إدخال 'الفرع'") instead of a generic one.
+      toast.error(typeof err === "string" && err ? err : "فشل الحفظ");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const detectSaveConflicts = async (payload) => {
+    const labels = [];
+    const generalWarnings = [];
+    // Identity keys of the payload rows that would be overwritten — used by
+    // "تجاوز وحفظ الباقي" to drop ONLY the conflicting periods and save the rest.
+    const skipKeys = [];
+    const scope = payload[0] || {};
+
+    // 1) Value-aware duplicate check via backend (same identity, different
+    //    values → the real data-corruption risk). Identical re-saves pass.
+    //    The backend is period-family aware: a weekly save also flags an
+    //    existing monthly (موحد) row for the same scope, and vice versa.
+    const alreadyExists = await invoke('check_medical_tickets_exist', { data: payload });
+    if (Array.isArray(alreadyExists) && alreadyExists.length > 0) {
+      alreadyExists.forEach(k => {
+        const periodLabel = k.period === 'مسائي' ? 'مسائي' : k.period === 'موحد' ? 'شهري' : 'صباحي';
+        labels.push(`${periodLabel} — أسبوع ${k.week_number} — فئة ${k.category}`);
+        skipKeys.push({
+          branch_id: k.branch_id, area_id: k.area_id, clinic_id: k.clinic_id,
+          week_number: k.week_number, category: k.category, period: k.period,
+          supported: isSupported,
+        });
+      });
+    }
+
+    // 2) عام ↔ فئات replacement warning (free tickets only). Queried directly
+    //    from the backend (fresh DB read) so the warning can NEVER be skipped
+    //    by an unloaded/async client-side records state.
+    if (!isSupported) {
+      const generalConflicts = await invoke('check_general_category_conflicts', { data: payload });
+      if (Array.isArray(generalConflicts) && generalConflicts.length > 0) {
+        generalConflicts.forEach(c => {
+          const periodLabel = c.period === 'مسائي' ? 'مسائي' : c.period === 'موحد' ? 'شهري' : 'صباحي';
+          if (c.category === 'عام') {
+            generalWarnings.push(`سيتم استبدال بيانات الفئات (${c.existing_categories.join('، ')}) ببيانات عام — ${periodLabel} أسبوع ${c.week_number}`);
+          } else {
+            generalWarnings.push(`سيتم استبدال بيانات عام المدخلة سابقاً بفئة ${c.category} — ${periodLabel} أسبوع ${c.week_number}`);
+          }
+          skipKeys.push({
+            branch_id: scope.branch_id, area_id: scope.area_id, clinic_id: scope.clinic_id,
+            week_number: c.week_number, category: c.category, period: c.period,
+            supported: false,
+          });
+        });
+      }
+    }
+
+    if (labels.length === 0 && generalWarnings.length === 0) return null;
+    return { labels, generalWarnings, skipKeys };
+  };
+
+  // ── Skip-and-save-the-rest (تجاوز وحفظ الباقي) ──────────────────────
+  // Drops only the conflicting rows from the payload and saves everything else
+  // unchanged, so the user can keep the previously-saved periods (e.g. the
+  // weekly data) while still persisting the other weeks/periods they typed.
+  const skipConflicts = async () => {
+    if (!pendingConflict) return;
+    const { payload, skipKeys, successMsg, logDetails, resetFn } = pendingConflict;
+    setPendingConflict(null);
+    const remaining = (payload || []).filter((item) => {
+      const itemUnified = String(item.period).includes('موحد');
+      return !(skipKeys || []).some((k) => {
+        const sameIdentity =
+          String(k.branch_id ?? '') === String(item.branch_id ?? '') &&
+          String(k.area_id ?? '') === String(item.area_id ?? '') &&
+          String(k.clinic_id ?? '') === String(item.clinic_id ?? '') &&
+          Number(k.week_number) === Number(item.week_number) &&
+          String(k.category ?? '') === String(item.category ?? '') &&
+          !!k.supported === !!item.is_supported_clinic;
+        if (!sameIdentity) return false;
+        // Exact period match OR cross-family (موحد ↔ صباحي/مسائي): the incoming
+        // row would replace the stored one, so it belongs to the skip set.
+        const keyUnified = String(k.period).includes('موحد');
+        return k.period === item.period || itemUnified !== keyUnified;
+      });
+    });
+
+    if (remaining.length === 0) {
+      toast.info("تم تجاوز جميع الفترات المتعارضة — لم يتم حفظ أي بيانات.");
+      if (resetFn) resetFn();
+      return;
+    }
+    await performSave(remaining, {
+      successMsg: `${successMsg} (مع تجاوز الفترات المتعارضة)`,
+      logDetails,
+      resetFn,
+    });
+  };
+
+  const confirmOverwrite = async () => {
+    if (!pendingConflict) return;
+    const { payload, successMsg, logDetails, resetFn } = pendingConflict;
+    setPendingConflict(null);
+    await performSave(payload, { successMsg, logDetails, resetFn });
+  };
+
+  // ── Pre-save triple-isolation check ────────────────────────────────
+  // Fails EARLY (before the user fills the form) when the selected month is
+  // already locked at a different hierarchy level. Mirrors the backend
+  // enforce_isolation_lock so the user never wastes time entering data that
+  // the save will reject.
+  const checkIsolationBeforeSave = async () => {
+    if (!hierarchy.branchId || isEditing) return true;
+    const myLevel = hierarchy.clinicId ? "clinic" : hierarchy.areaId ? "area" : "branch";
+    try {
+      const lockedLevel = await invoke("get_month_isolation_rule", {
+        branchId: parseInt(hierarchy.branchId),
+        dispenseMonth: hierarchy.dispenseMonth,
+      });
+      if (lockedLevel && lockedLevel !== myLevel) {
+        const names = { branch: "الفرع", area: "المنطقة", clinic: "العيادة" };
+        toast.error(
+          `خطأ في العزل الثلاثي: هذا الشهر مقفل على مستوى إدخال '${names[lockedLevel] || lockedLevel}'. ` +
+          `لا يمكن الإدخال على مستوى '${names[myLevel] || myLevel}'.`
+        );
+        return false;
+      }
+    } catch (err) {
+      console.error("Failed to fetch isolation rule:", err);
+    }
+    return true;
+  };
+
   const handleWeeklySave = async () => {
     if (!hierarchy.branchId) {
       toast.warning("يرجى اختيار الموقع للإدخال");
       return;
     }
-    if (!isEditing) {
-      const existingData = records.filter(r => {
-        const matchesHierarchy = r.branch_id?.toString() === hierarchy.branchId?.toString() &&
-                                 (hierarchy.areaId ? r.area_id?.toString() === hierarchy.areaId.toString() : true) &&
-                                 (hierarchy.clinicId ? r.clinicId?.toString() === hierarchy.clinicId.toString() : true);
-        const matchesType = !!r.is_supported_clinic === !!isSupported;
-        const matchesWeek = r.week_number === selectedWeek;
-        const matchesCategory = isSupported ? ["هيئة", "طلاب", "رضع", "المرأة المعيلة"].includes(r.category) : r.category === selectedCategory;
-        return matchesHierarchy && matchesType && matchesWeek && matchesCategory;
-      });
-
-      if (existingData.length > 0) {
-        toast.warning("سبق إدخال البيانات. يمكنك الذهاب للجدول لتعديل أو حذف السجل أولاً.");
-        return;
-      }
-    }
-
-    setSaving(true);
-    try {
-      let payload = [];
+    if (!(await checkIsolationBeforeSave())) return;
+    let payload = [];
       if (isSupported) {
         // Authority
         payload.push({
@@ -238,31 +387,6 @@ const MedicalTicketsPage = () => {
           ticket_56c_count: 0,
           is_supported_clinic: true,
         });
-        // Woman
-        payload.push({
-          branch_id: parseInt(hierarchy.branchId),
-          area_id: hierarchy.areaId ? parseInt(hierarchy.areaId) : null,
-          clinic_id: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,
-          dispense_month: hierarchy.dispenseMonth,
-          category: "المرأة المعيلة",
-          period: "صباحي",
-          week_number: selectedWeek,
-          ticket_56b_count: parseInt(supportedWeeklyForm.morning_woman) || 0,
-          ticket_56c_count: 0,
-          is_supported_clinic: true,
-        });
-        payload.push({
-          branch_id: parseInt(hierarchy.branchId),
-          area_id: hierarchy.areaId ? parseInt(hierarchy.areaId) : null,
-          clinic_id: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,
-          dispense_month: hierarchy.dispenseMonth,
-          category: "المرأة المعيلة",
-          period: "مسائي",
-          week_number: selectedWeek,
-          ticket_56b_count: parseInt(supportedWeeklyForm.evening_woman) || 0,
-          ticket_56c_count: 0,
-          is_supported_clinic: true,
-        });
       } else {
         payload = [
           {
@@ -291,40 +415,57 @@ const MedicalTicketsPage = () => {
           },
         ];
       }
-      await invoke("save_medical_tickets_bulk", { data: payload });
-      
-      await invoke('log_frontend_action', {
-        userId: user ? user.id : null,
-        action: 'BULK_UPDATE',
-        tableName: 'medical_tickets',
-        recordId: null,
-        details: `حفظ تذاكر أسبوعية للأسبوع ${selectedWeek} لفرع ${hierarchy.branchId} شهر ${hierarchy.dispenseMonth} (${isSupported ? 'مدعم' : 'مجاني'})`
-      });
+      if (!isEditing) {
+        const conflict = await detectSaveConflicts(payload);
+        if (conflict) {
+          setPendingConflict({
+            payload,
+            ...conflict,
+            successMsg: "تم حفظ بيانات الأسبوع بنجاح",
+            logDetails: `حفظ تذاكر أسبوعية للأسبوع ${selectedWeek} لفرع ${hierarchy.branchId} شهر ${hierarchy.dispenseMonth} (${isSupported ? 'مدعم' : 'مجاني'})`,
+            resetFn: () => {
+              setWeeklyForm({
+                morning_56b: "",
+                morning_56c: "",
+                evening_56b: "",
+                evening_56c: "",
+              });
+              setSupportedWeeklyForm({
+                morning_authority: "",
+                morning_students: "",
+                morning_infants: "",
+                evening_authority: "",
+                evening_students: "",
+                evening_infants: "",
+              });
+              setIsEditing(false);
+            },
+          });
+          return;
+        }
+      }
 
-      toast.success("تم حفظ بيانات الأسبوع بنجاح");
-      loadRecords();
-      setWeeklyForm({
-        morning_56b: "",
-        morning_56c: "",
-        evening_56b: "",
-        evening_56c: "",
+      await performSave(payload, {
+        successMsg: "تم حفظ بيانات الأسبوع بنجاح",
+        logDetails: `حفظ تذاكر أسبوعية للأسبوع ${selectedWeek} لفرع ${hierarchy.branchId} شهر ${hierarchy.dispenseMonth} (${isSupported ? 'مدعم' : 'مجاني'})`,
+        resetFn: () => {
+          setWeeklyForm({
+            morning_56b: "",
+            morning_56c: "",
+            evening_56b: "",
+            evening_56c: "",
+          });
+          setSupportedWeeklyForm({
+            morning_authority: "",
+            morning_students: "",
+            morning_infants: "",
+            evening_authority: "",
+            evening_students: "",
+            evening_infants: "",
+          });
+          setIsEditing(false);
+        },
       });
-      setSupportedWeeklyForm({
-        morning_authority: "",
-        morning_students: "",
-        morning_infants: "",
-        morning_woman: "",
-        evening_authority: "",
-        evening_students: "",
-        evening_infants: "",
-        evening_woman: "",
-      });
-      setIsEditing(false);
-    } catch (err) {
-      toast.error("فشل الحفظ");
-    } finally {
-      setSaving(false);
-    }
   };
 
   const handleMonthlySave = async () => {
@@ -332,25 +473,8 @@ const MedicalTicketsPage = () => {
       toast.warning("يرجى اختيار الموقع للإدخال");
       return;
     }
-    if (!isEditing) {
-      const existingData = records.filter(r => {
-        const matchesHierarchy = r.branch_id?.toString() === hierarchy.branchId?.toString() &&
-                                 (hierarchy.areaId ? r.area_id?.toString() === hierarchy.areaId.toString() : true) &&
-                                 (hierarchy.clinicId ? r.clinic_id?.toString() === hierarchy.clinic_id.toString() : true);
-        const matchesType = !!r.is_supported_clinic === !!isSupported;
-        const matchesCategory = isSupported ? ["هيئة", "طلاب", "رضع", "المرأة المعيلة"].includes(r.category) : r.category === selectedCategory;
-        return matchesHierarchy && matchesType && matchesCategory;
-      });
-
-      if (existingData.length > 0) {
-        toast.warning("سبق إدخال البيانات لهذا الشهر. يمكنك الذهاب للجدول لتعديل أو حذف السجل أولاً.");
-        return;
-      }
-    }
-
-    setSaving(true);
-    try {
-      let payload = [];
+    if (!(await checkIsolationBeforeSave())) return;
+    let payload = [];
       if (isSupported) {
         monthlyForm.forEach(item => {
           payload.push({
@@ -389,25 +513,13 @@ const MedicalTicketsPage = () => {
             ticket_56c_count: 0,
             is_supported_clinic: true,
           });
-          payload.push({
-            branch_id: parseInt(hierarchy.branchId),
-            area_id: hierarchy.areaId ? parseInt(hierarchy.areaId) : null,
-            clinic_id: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,
-            dispense_month: hierarchy.dispenseMonth,
-            category: "المرأة المعيلة",
-            period: "موحد",
-            week_number: item.week,
-            ticket_56b_count: parseInt(item.woman) || 0,
-            ticket_56c_count: 0,
-            is_supported_clinic: true,
-          });
         });
       } else {
         payload = monthlyForm.map((item) => ({
           branch_id: parseInt(hierarchy.branchId),
           area_id: hierarchy.areaId ? parseInt(hierarchy.areaId) : null,
           clinic_id: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,
-          dispense_month: hierarchy.dispense_month || hierarchy.dispenseMonth,
+          dispense_month: hierarchy.dispenseMonth,
           category: selectedCategory,
           period: "موحد",
           week_number: item.week,
@@ -416,29 +528,39 @@ const MedicalTicketsPage = () => {
           is_supported_clinic: false,
         }));
       }
-      await invoke("save_medical_tickets_bulk", { data: payload });
-      
-      await invoke('log_frontend_action', {
-        userId: user ? user.id : null,
-        action: 'BULK_UPDATE',
-        tableName: 'medical_tickets',
-        recordId: null,
-        details: `حفظ تذاكر شهرية لفرع ${hierarchy.branchId} شهر ${hierarchy.dispenseMonth} (${isSupported ? 'مدعم' : 'مجاني'})`
-      });
+      if (!isEditing) {
+        const conflict = await detectSaveConflicts(payload);
+        if (conflict) {
+          setPendingConflict({
+            payload,
+            ...conflict,
+            successMsg: "تم حفظ بيانات الشهر بنجاح",
+            logDetails: `حفظ تذاكر شهرية لفرع ${hierarchy.branchId} شهر ${hierarchy.dispenseMonth} (${isSupported ? 'مدعم' : 'مجاني'})`,
+            resetFn: () => {
+              setMonthlyForm([
+                { week: 1, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+                { week: 2, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+                { week: 3, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+                { week: 4, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+              ]);
+            },
+          });
+          return;
+        }
+      }
 
-      toast.success("تم حفظ بيانات الشهر بنجاح");
-      loadRecords();
-      setMonthlyForm([
-        { week: 1, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "", woman: "" },
-        { week: 2, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "", woman: "" },
-        { week: 3, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "", woman: "" },
-        { week: 4, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "", woman: "" },
-      ]);
-    } catch (err) {
-      toast.error("فشل الحفظ");
-    } finally {
-      setSaving(false);
-    }
+      await performSave(payload, {
+        successMsg: "تم حفظ بيانات الشهر بنجاح",
+        logDetails: `حفظ تذاكر شهرية لفرع ${hierarchy.branchId} شهر ${hierarchy.dispenseMonth} (${isSupported ? 'مدعم' : 'مجاني'})`,
+        resetFn: () => {
+          setMonthlyForm([
+            { week: 1, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+            { week: 2, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+            { week: 3, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+            { week: 4, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" },
+          ]);
+        },
+      });
   };
 
   const handleDailySave = async () => {
@@ -446,31 +568,13 @@ const MedicalTicketsPage = () => {
       toast.warning("الإدخال اليومي متاح فقط في وضع العيادات");
       return;
     }
+    if (!(await checkIsolationBeforeSave())) return;
     
     // Calculate week number based on date: 1-7 (W1), 8-15 (W2), 16-22 (W3), 23+ (W4)
     const day = new Date(entryDate).getDate();
     const calculatedWeek = day <= 7 ? 1 : day <= 15 ? 2 : day <= 22 ? 3 : 4;
     
-    if (!isEditing) {
-      const existingData = records.filter(r => {
-        const matchesHierarchy = r.branch_id?.toString() === hierarchy.branchId?.toString() &&
-                                 (hierarchy.areaId ? r.area_id?.toString() === hierarchy.areaId.toString() : true) &&
-                                 r.clinic_id?.toString() === hierarchy.clinicId?.toString();
-        const matchesType = !!r.is_supported_clinic === !!isSupported;
-        const matchesDate = r.entry_date === entryDate;
-        const matchesCategory = isSupported ? ["هيئة", "طلاب", "رضع", "المرأة المعيلة"].includes(r.category) : r.category === selectedCategory;
-        return matchesHierarchy && matchesType && matchesDate && matchesCategory;
-      });
-
-      if (existingData.length > 0) {
-        toast.warning("سبق إدخال البيانات لهذا اليوم. يمكنك الذهاب للجدول لتعديل أو حذف السجل أولاً.");
-        return;
-      }
-    }
-
-    setSaving(true);
-    try {
-      let payload = [];
+    let payload = [];
       if (isSupported) {
         payload = [
           {
@@ -551,32 +655,6 @@ const MedicalTicketsPage = () => {
             is_supported_clinic: true,
             entry_date: entryDate,
           },
-          {
-            branch_id: parseInt(hierarchy.branchId),
-            area_id: parseInt(hierarchy.areaId),
-            clinic_id: parseInt(hierarchy.clinicId),
-            dispense_month: hierarchy.dispenseMonth,
-            category: "المرأة المعيلة",
-            period: "صباحي",
-            week_number: calculatedWeek,
-            ticket_56b_count: parseInt(supportedWeeklyForm.morning_woman) || 0,
-            ticket_56c_count: 0,
-            is_supported_clinic: true,
-            entry_date: entryDate,
-          },
-          {
-            branch_id: parseInt(hierarchy.branchId),
-            area_id: parseInt(hierarchy.areaId),
-            clinic_id: parseInt(hierarchy.clinicId),
-            dispense_month: hierarchy.dispenseMonth,
-            category: "المرأة المعيلة",
-            period: "مسائي",
-            week_number: calculatedWeek,
-            ticket_56b_count: parseInt(supportedWeeklyForm.evening_woman) || 0,
-            ticket_56c_count: 0,
-            is_supported_clinic: true,
-            entry_date: entryDate,
-          },
         ];
       } else {
         payload = [
@@ -608,40 +686,293 @@ const MedicalTicketsPage = () => {
           },
         ];
       }
-      await invoke("save_medical_tickets_bulk", { data: payload });
-      
-      await invoke('log_frontend_action', {
-        userId: user ? user.id : null,
-        action: 'INSERT',
-        tableName: 'medical_tickets',
-        recordId: null,
-        details: `حفظ تذاكر يومية لتاريخ ${entryDate} لعيادة ${hierarchy.clinicId} (${isSupported ? 'مدعم' : 'مجاني'})`
-      });
+      if (!isEditing) {
+        const conflict = await detectSaveConflicts(payload);
+        if (conflict) {
+          setPendingConflict({
+            payload,
+            ...conflict,
+            successMsg: `تم حفظ بيانات اليوم (${isSupported ? 'مدعم' : 'مجاني'}) بنجاح (الأسبوع ${calculatedWeek})`,
+            logDetails: `حفظ تذاكر يومية لتاريخ ${entryDate} لعيادة ${hierarchy.clinicId} (${isSupported ? 'مدعم' : 'مجاني'})`,
+            resetFn: () => {
+              setWeeklyForm({
+                morning_56b: "",
+                morning_56c: "",
+                evening_56b: "",
+                evening_56c: "",
+              });
+              setSupportedWeeklyForm({
+                morning_authority: "",
+                morning_students: "",
+                morning_infants: "",
+                evening_authority: "",
+                evening_students: "",
+                evening_infants: "",
+              });
+              setIsEditing(false);
+            },
+          });
+          return;
+        }
+      }
 
-      toast.success(`تم حفظ بيانات اليوم (${isSupported ? 'مدعم' : 'مجاني'}) بنجاح (الأسبوع ${calculatedWeek})`);
-      loadRecords();
-      setWeeklyForm({
-        morning_56b: "",
-        morning_56c: "",
-        evening_56b: "",
-        evening_56c: "",
+      await performSave(payload, {
+        successMsg: `تم حفظ بيانات اليوم (${isSupported ? 'مدعم' : 'مجاني'}) بنجاح (الأسبوع ${calculatedWeek})`,
+        logDetails: `حفظ تذاكر يومية لتاريخ ${entryDate} لعيادة ${hierarchy.clinicId} (${isSupported ? 'مدعم' : 'مجاني'})`,
+        resetFn: () => {
+          setWeeklyForm({
+            morning_56b: "",
+            morning_56c: "",
+            evening_56b: "",
+            evening_56c: "",
+          });
+          setSupportedWeeklyForm({
+            morning_authority: "",
+            morning_students: "",
+            morning_infants: "",
+            evening_authority: "",
+            evening_students: "",
+            evening_infants: "",
+          });
+          setIsEditing(false);
+        },
       });
-      setSupportedWeeklyForm({
-        morning_authority: "",
-        morning_students: "",
-        morning_infants: "",
-        morning_woman: "",
-        evening_authority: "",
-        evening_students: "",
-        evening_infants: "",
-        evening_woman: "",
-      });
-      setIsEditing(false);
-    } catch (err) {
-      toast.error("فشل الحفظ");
-    } finally {
-      setSaving(false);
+  };
+
+  // ── Two-way isolation between weekly & monthly entry systems ───────────
+  // Switching between the أسبوعي (صباحي/مسائي flat fields) and الشهري
+  // (unified موحد value per week) forms NEVER silently discards typed data:
+  // a confirmation dialog warns first, and on approval the in-memory values
+  // are carried into the target system's shape — weekly flat fields are
+  // summed (صباحي+مسائي) into the matching week's unified cell, and the
+  // unified cell becomes the morning side of the weekly form (evening 0) so
+  // the total is preserved in both directions. A source form with no values
+  // leaves the target form untouched (loaded data is never clobbered).
+  // ── Saved-data merge on entry-mode switch ─────────────────────────────
+  // The carry above only moves what the user just typed. Data ALREADY SAVED
+  // under the other system (weekly صباحي/مسائي rows or monthly موحد rows) is
+  // pulled from the loaded `records` so the target form never looks empty when
+  // the previous system holds data for the same scope — this fixes the report
+  // "boxes appear without loading the data saved under the previous system".
+  // Only EMPTY cells are filled: the in-memory carry / user edits always win.
+  const fillFromSavedRecords = (target) => {
+    if (target === "daily") return; // daily mode loads its own records per entry_date
+    if (!Array.isArray(records) || records.length === 0) return;
+    if (!hierarchy.branchId || !hierarchy.dispenseMonth) return;
+    const scopeRows = records.filter((r) =>
+      String(r.branch_id) === String(hierarchy.branchId) &&
+      (hierarchy.areaId ? String(r.area_id) === String(hierarchy.areaId) : r.area_id == null) &&
+      (hierarchy.clinicId ? String(r.clinic_id) === String(hierarchy.clinicId) : r.clinic_id == null) &&
+      String(r.dispense_month) === String(hierarchy.dispenseMonth) &&
+      !!r.is_supported_clinic === isSupported
+    );
+    if (scopeRows.length === 0) return;
+
+    const sum = (list, field) => list.reduce((s, r) => s + (Number(r[field]) || 0), 0);
+    const catList = (list, cat) => (cat === "عام" ? list : list.filter((r) => r.category === cat));
+
+    if (target === "monthly") {
+      // Fill ALL week cells (the monthly form shows the whole month).
+      setMonthlyForm((prev) =>
+        prev.map((item) => {
+          const n = { ...item };
+          const rows = scopeRows.filter((r) => Number(r.week_number) === Number(item.week));
+          const weekly = rows.filter((r) => r.period === "صباحي" || r.period === "مسائي");
+          const unified = rows.filter((r) => r.period === "موحد");
+          if (isSupported) {
+            const put = (key, cat) => {
+              if (parseInt(n[key]) > 0) return;
+              const v = sum(catList(weekly, cat), "ticket_56b_count") + sum(catList(unified, cat), "ticket_56b_count");
+              n[key] = v > 0 ? String(v) : n[key];
+            };
+            put("authority", "هيئة");
+            put("students", "طلاب");
+            put("infants", "رضع");
+          } else {
+            if (!(parseInt(n.tickets_56b) > 0)) {
+              const v = sum(catList(weekly, selectedCategory), "ticket_56b_count") + sum(catList(unified, selectedCategory), "ticket_56b_count");
+              n.tickets_56b = v > 0 ? String(v) : n.tickets_56b;
+            }
+            if (!(parseInt(n.tickets_56c) > 0)) {
+              const v = sum(catList(weekly, selectedCategory), "ticket_56c_count") + sum(catList(unified, selectedCategory), "ticket_56c_count");
+              n.tickets_56c = v > 0 ? String(v) : n.tickets_56c;
+            }
+          }
+          return n;
+        })
+      );
+    } else {
+      // Weekly target: fill the current week's صباحي/مسائي from saved rows.
+      const rows = scopeRows.filter((r) => Number(r.week_number) === Number(selectedWeek));
+      const morning = rows.filter((r) => r.period === "صباحي");
+      const evening = rows.filter((r) => r.period === "مسائي");
+      const unified = rows.filter((r) => r.period === "موحد");
+      if (isSupported) {
+        setSupportedWeeklyForm((prev) => {
+          const n = { ...prev };
+          const putM = (key, cat) => {
+            if (parseInt(n[key]) > 0) return;
+            const v = sum(catList(morning, cat), "ticket_56b_count") + sum(catList(unified, cat), "ticket_56b_count");
+            n[key] = v > 0 ? String(v) : n[key];
+          };
+          const putE = (key, cat) => {
+            if (parseInt(n[key]) > 0) return;
+            const v = sum(catList(evening, cat), "ticket_56b_count");
+            n[key] = v > 0 ? String(v) : n[key];
+          };
+          putM("morning_authority", "هيئة");
+          putM("morning_students", "طلاب");
+          putM("morning_infants", "رضع");
+          putE("evening_authority", "هيئة");
+          putE("evening_students", "طلاب");
+          putE("evening_infants", "رضع");
+          return n;
+        });
+      } else {
+        setWeeklyForm((prev) => {
+          const n = { ...prev };
+          const putM = (keyB, keyC) => {
+            if (!(parseInt(n[keyB]) > 0)) {
+              const v = sum(catList(morning, selectedCategory), "ticket_56b_count") + sum(catList(unified, selectedCategory), "ticket_56b_count");
+              n[keyB] = v > 0 ? String(v) : n[keyB];
+            }
+            if (!(parseInt(n[keyC]) > 0)) {
+              const v = sum(catList(morning, selectedCategory), "ticket_56c_count") + sum(catList(unified, selectedCategory), "ticket_56c_count");
+              n[keyC] = v > 0 ? String(v) : n[keyC];
+            }
+          };
+          const putE = (keyB, keyC) => {
+            if (!(parseInt(n[keyB]) > 0)) {
+              const v = sum(catList(evening, selectedCategory), "ticket_56b_count");
+              n[keyB] = v > 0 ? String(v) : n[keyB];
+            }
+            if (!(parseInt(n[keyC]) > 0)) {
+              const v = sum(catList(evening, selectedCategory), "ticket_56c_count");
+              n[keyC] = v > 0 ? String(v) : n[keyC];
+            }
+          };
+          putM("morning_56b", "morning_56c");
+          putE("evening_56b", "evening_56c");
+          return n;
+        });
+      }
     }
+  };
+
+  const requestEntryModeSwitch = (target) => {
+    if (target === entryMode) return;
+    // quick_clinics is a separate grid surface — switch without isolation.
+    if (target === 'quick_clinics') {
+      setEntryMode(target);
+      return;
+    }
+    const fromMonthly = entryMode === 'monthly';
+    const toMonthly = target === 'monthly';
+    // Only weekly/daily ↔ monthly changes the data shape and needs isolation.
+    if (!fromMonthly && !toMonthly) {
+      setEntryMode(target);
+      return;
+    }
+
+    const labels = { weekly: 'الأسبوعي', monthly: 'الشهري', daily: 'اليومي' };
+    const currentLabel = labels[entryMode] || entryMode;
+    const targetLabel = labels[target] || target;
+    const currentDesc = entryMode === 'monthly'
+      ? 'شهري موحد'
+      : (entryMode === 'daily' ? `تاريخ ${entryDate}` : `أسبوع ${selectedWeek}`);
+    const targetDesc = target === 'monthly'
+      ? 'شهري موحد'
+      : (target === 'daily' ? `تاريخ ${entryDate}` : `أسبوع ${selectedWeek}`);
+
+    const msg = `أنت حالياً بنظام الإدخال ${currentLabel} (${currentDesc}).\n` +
+      `هل تريد الانتقال إلى نظام الإدخال ${targetLabel} (${targetDesc})؟\n\n` +
+      `سيتم نقل القيم المدخلة حالياً إلى النظام الجديد دون مسحها.`;
+    if (!window.confirm(msg)) return;
+
+    if (toMonthly) {
+      // weekly/daily → monthly: sum صباحي+مسائي into the unified week cell.
+      const hasValue = [
+        weeklyForm.morning_56b, weeklyForm.morning_56c,
+        weeklyForm.evening_56b, weeklyForm.evening_56c,
+        supportedWeeklyForm.morning_authority, supportedWeeklyForm.morning_students,
+        supportedWeeklyForm.morning_infants, supportedWeeklyForm.evening_authority,
+        supportedWeeklyForm.evening_students, supportedWeeklyForm.evening_infants,
+      ].some(x => parseInt(x) > 0);
+      if (hasValue) {
+        const sum = (a, b) => ((parseInt(a) || 0) + (parseInt(b) || 0)).toString();
+        setMonthlyForm(prev => prev.map((item, i) => {
+          if (i !== selectedWeek - 1) return item;
+          return {
+            ...item,
+            tickets_56b: sum(weeklyForm.morning_56b, weeklyForm.evening_56b),
+            tickets_56c: sum(weeklyForm.morning_56c, weeklyForm.evening_56c),
+            authority: sum(supportedWeeklyForm.morning_authority, supportedWeeklyForm.evening_authority),
+            students: sum(supportedWeeklyForm.morning_students, supportedWeeklyForm.evening_students),
+            infants: sum(supportedWeeklyForm.morning_infants, supportedWeeklyForm.evening_infants),
+          };
+        }));
+      }
+      // The carry is programmatic, not a user edit — reset the flag (whether
+      // or not values were carried) so a later monthly→weekly return treats
+      // this switch as a plain round-trip and never lingers true.
+      monthlyEditedRef.current = false;
+    } else {
+      // monthly → weekly/daily: if the user EDITED the monthly form since the
+      // last carry, the monthly value is authoritative — overwrite the split
+      // (unified total lands on the morning side, evening 0) so the user's
+      // latest monthly edit is what the weekly form shows. Otherwise (plain
+      // round-trip) fill only the EMPTY weekly fields so any صباحي/مسائي split
+      // the user originally typed is kept losslessly.
+      const item = monthlyForm[selectedWeek - 1] || {};
+      const unifiedHasValue = [item.tickets_56b, item.tickets_56c, item.authority, item.students, item.infants]
+        .some(x => parseInt(x) > 0);
+      if (unifiedHasValue) {
+        const s = (x) => (parseInt(x) || 0).toString();
+        if (monthlyEditedRef.current) {
+          // User edited monthly → monthly wins; show its total in the week form.
+          setWeeklyForm({
+            morning_56b: s(item.tickets_56b),
+            morning_56c: s(item.tickets_56c),
+            evening_56b: '0',
+            evening_56c: '0',
+          });
+          setSupportedWeeklyForm({
+            morning_authority: s(item.authority),
+            morning_students: s(item.students),
+            morning_infants: s(item.infants),
+            evening_authority: '0',
+            evening_students: '0',
+            evening_infants: '0',
+          });
+        } else {
+          // Plain round-trip → preserve the original split.
+          const fillOr = (prevVal, monthVal) => {
+            if (parseInt(prevVal) > 0) return prevVal; // keep existing split
+            const m = parseInt(monthVal);
+            return m > 0 ? m.toString() : prevVal;     // fill from unified if any
+          };
+          setWeeklyForm(prev => ({
+            morning_56b: fillOr(prev.morning_56b, item.tickets_56b),
+            morning_56c: fillOr(prev.morning_56c, item.tickets_56c),
+            evening_56b: fillOr(prev.evening_56b, ''),
+            evening_56c: fillOr(prev.evening_56c, ''),
+          }));
+          setSupportedWeeklyForm(prev => ({
+            morning_authority: fillOr(prev.morning_authority, item.authority),
+            morning_students: fillOr(prev.morning_students, item.students),
+            morning_infants: fillOr(prev.morning_infants, item.infants),
+            evening_authority: fillOr(prev.evening_authority, ''),
+            evening_students: fillOr(prev.evening_students, ''),
+            evening_infants: fillOr(prev.evening_infants, ''),
+          }));
+        }
+      }
+      monthlyEditedRef.current = false;
+    }
+    // Pull data already saved under the other system into the target form so
+    // switching never shows empty boxes when the previous system holds data.
+    fillFromSavedRecords(target);
+    setEntryMode(target);
   };
 
   const handleCopyPreviousWeek = () => {
@@ -668,21 +999,17 @@ const MedicalTicketsPage = () => {
       const mAuth = prevRecords.find(r => r.period === "صباحي" && r.category === "هيئة");
       const mStud = prevRecords.find(r => r.period === "صباحي" && r.category === "طلاب");
       const mInf = prevRecords.find(r => r.period === "صباحي" && r.category === "رضع");
-      const mWoman = prevRecords.find(r => r.period === "صباحي" && r.category === "المرأة المعيلة");
       const eAuth = prevRecords.find(r => r.period === "مسائي" && r.category === "هيئة");
       const eStud = prevRecords.find(r => r.period === "مسائي" && r.category === "طلاب");
       const eInf = prevRecords.find(r => r.period === "مسائي" && r.category === "رضع");
-      const eWoman = prevRecords.find(r => r.period === "مسائي" && r.category === "المرأة المعيلة");
       
       setSupportedWeeklyForm({
           morning_authority: mAuth ? mAuth.ticket_56b_count.toString() : "",
           morning_students: mStud ? mStud.ticket_56b_count.toString() : "",
           morning_infants: mInf ? mInf.ticket_56b_count.toString() : "",
-          morning_woman: mWoman ? mWoman.ticket_56b_count.toString() : "",
           evening_authority: eAuth ? eAuth.ticket_56b_count.toString() : "",
           evening_students: eStud ? eStud.ticket_56b_count.toString() : "",
           evening_infants: eInf ? eInf.ticket_56b_count.toString() : "",
-          evening_woman: eWoman ? eWoman.ticket_56b_count.toString() : "",
       });
     } else {
       const morning = prevRecords.find(r => r.period === "صباحي" && r.category === selectedCategory);
@@ -737,13 +1064,11 @@ const MedicalTicketsPage = () => {
         const auth = matchingRecords.find(r => r.week_number === w && r.category === "هيئة");
         const stud = matchingRecords.find(r => r.week_number === w && r.category === "طلاب");
         const inf = matchingRecords.find(r => r.week_number === w && r.category === "رضع");
-        const wom = matchingRecords.find(r => r.week_number === w && r.category === "المرأة المعيلة");
         return {
           week: w,
           authority: auth ? auth.ticket_56b_count.toString() : "",
           students: stud ? stud.ticket_56b_count.toString() : "",
           infants: inf ? inf.ticket_56b_count.toString() : "",
-          woman: wom ? wom.ticket_56b_count.toString() : "",
           tickets_56b: "",
           tickets_56c: ""
         };
@@ -755,13 +1080,16 @@ const MedicalTicketsPage = () => {
           tickets_56c: rec ? rec.ticket_56c_count.toString() : "",
           authority: "",
           students: "",
-          infants: "",
-          woman: ""
+          infants: ""
         };
       }
     });
 
     setMonthlyForm(nextMonthly);
+    // Data loaded programmatically for editing is not a user edit — reset the
+    // flag so the next monthly→weekly return treats it as a plain round-trip
+    // (fillOr) instead of overwriting the weekly split.
+    monthlyEditedRef.current = false;
     
     // Maintain current mode if it's daily or weekly
     if (entryMode === "daily") {
@@ -801,21 +1129,17 @@ const MedicalTicketsPage = () => {
         const mAuth = dayRecords.find(r => r.period === "صباحي" && r.category === "هيئة");
         const mStud = dayRecords.find(r => r.period === "صباحي" && r.category === "طلاب");
         const mInf = dayRecords.find(r => r.period === "صباحي" && r.category === "رضع");
-        const mWoman = dayRecords.find(r => r.period === "صباحي" && r.category === "المرأة المعيلة");
         const eAuth = dayRecords.find(r => r.period === "مسائي" && r.category === "هيئة");
         const eStud = dayRecords.find(r => r.period === "مسائي" && r.category === "طلاب");
         const eInf = dayRecords.find(r => r.period === "مسائي" && r.category === "رضع");
-        const eWoman = dayRecords.find(r => r.period === "مسائي" && r.category === "المرأة المعيلة");
         
         setSupportedWeeklyForm({
             morning_authority: mAuth ? mAuth.ticket_56b_count.toString() : "",
             morning_students: mStud ? mStud.ticket_56b_count.toString() : "",
             morning_infants: mInf ? mInf.ticket_56b_count.toString() : "",
-            morning_woman: mWoman ? mWoman.ticket_56b_count.toString() : "",
             evening_authority: eAuth ? eAuth.ticket_56b_count.toString() : "",
             evening_students: eStud ? eStud.ticket_56b_count.toString() : "",
             evening_infants: eInf ? eInf.ticket_56b_count.toString() : "",
-            evening_woman: eWoman ? eWoman.ticket_56b_count.toString() : "",
         });
     }
     
@@ -872,6 +1196,7 @@ const MedicalTicketsPage = () => {
   };
 
   const categories = ["هيئة", "طلاب", "رضع", "المرأة المعيلة"];
+  const supportedCategories = ["هيئة", "طلاب", "رضع"];
 
   // Helper to aggregate records for table display
   const getAggregatedData = (supported) => {
@@ -951,7 +1276,7 @@ const MedicalTicketsPage = () => {
 
         [1, 2, 3, 4].forEach((w) => {
           const weekRecs = levelRecords.filter((r) => r.week_number === w);
-          categories.forEach((cat) => {
+          supportedCategories.forEach((cat) => {
             const catRecs = weekRecs.filter((r) => r.category === cat);
             const sum = catRecs.reduce(
               (acc, curr) =>
@@ -1014,22 +1339,18 @@ const MedicalTicketsPage = () => {
     setCurrentPageSupported(1);
   }, [searchTerm, filterLockStatus, filterHighVolume]);
 
-  const isLocked = checkIsMonthLocked(hierarchy.dispenseMonth);
-
   const statsItems = useMemo(() => {
     if (isSupported) {
       const allData = getProcessedData(true).allData;
       const totalAuth = allData.reduce((s, r) => s + (parseInt(r.total_هيئة) || 0), 0);
       const totalStud = allData.reduce((s, r) => s + (parseInt(r.total_طلاب) || 0), 0);
       const totalInf = allData.reduce((s, r) => s + (parseInt(r.total_رضع) || 0), 0);
-      const totalWoman = allData.reduce((s, r) => s + (parseInt(r.total_المرأة_المعيلة) || 0), 0);
-      const total = totalAuth + totalStud + totalInf + totalWoman;
+      const total = totalAuth + totalStud + totalInf;
 
       return [
         { label: 'هيئة', value: totalAuth, icon: Building2, color: 'text-blue-600', trend: totalAuth > 0 ? '+%' : '' },
         { label: 'طلاب', value: totalStud, icon: GraduationCap, color: 'text-indigo-600' },
         { label: 'رضع', value: totalInf, icon: Baby, color: 'text-emerald-600' },
-        { label: 'مرأة معيلة', value: totalWoman, icon: User, color: 'text-rose-600' },
         { label: 'الإجمالي', value: total, icon: Calculator, color: 'text-[var(--color-primary)]' },
       ];
     } else {
@@ -1089,21 +1410,17 @@ const MedicalTicketsPage = () => {
             const mAuth = dayRecords.find(r => r.period === "صباحي" && r.category === "هيئة");
             const mStud = dayRecords.find(r => r.period === "صباحي" && r.category === "طلاب");
             const mInf = dayRecords.find(r => r.period === "صباحي" && r.category === "رضع");
-            const mWoman = dayRecords.find(r => r.period === "صباحي" && r.category === "المرأة المعيلة");
             const eAuth = dayRecords.find(r => r.period === "مسائي" && r.category === "هيئة");
             const eStud = dayRecords.find(r => r.period === "مسائي" && r.category === "طلاب");
             const eInf = dayRecords.find(r => r.period === "مسائي" && r.category === "رضع");
-            const eWoman = dayRecords.find(r => r.period === "مسائي" && r.category === "المرأة المعيلة");
             
             setSupportedWeeklyForm({
                 morning_authority: mAuth ? mAuth.ticket_56b_count.toString() : "",
                 morning_students: mStud ? mStud.ticket_56b_count.toString() : "",
                 morning_infants: mInf ? mInf.ticket_56b_count.toString() : "",
-                morning_woman: mWoman ? mWoman.ticket_56b_count.toString() : "",
                 evening_authority: eAuth ? eAuth.ticket_56b_count.toString() : "",
                 evening_students: eStud ? eStud.ticket_56b_count.toString() : "",
                 evening_infants: eInf ? eInf.ticket_56b_count.toString() : "",
-                evening_woman: eWoman ? eWoman.ticket_56b_count.toString() : "",
             });
         } else {
             const morning = dayRecords.find(r => r.period === "صباحي");
@@ -1118,7 +1435,7 @@ const MedicalTicketsPage = () => {
         toast.info(`تم تحميل بيانات يوم ${dayNum}`);
     } else {
         setWeeklyForm({ morning_56b: "", morning_56c: "", evening_56b: "", evening_56c: "" });
-        setSupportedWeeklyForm({ morning_authority: "", morning_students: "", morning_infants: "", morning_woman: "", evening_authority: "", evening_students: "", evening_infants: "", evening_woman: "" });
+        setSupportedWeeklyForm({ morning_authority: "", morning_students: "", morning_infants: "", evening_authority: "", evening_students: "", evening_infants: "" });
     }
   };
 
@@ -1133,13 +1450,11 @@ const MedicalTicketsPage = () => {
       morning_authority: "",
       morning_students: "",
       morning_infants: "",
-      morning_woman: "",
       evening_authority: "",
       evening_students: "",
       evening_infants: "",
-      evening_woman: "",
     });
-    setMonthlyForm(monthlyForm.map(f => ({ ...f, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "", woman: "" })));
+    setMonthlyForm(monthlyForm.map(f => ({ ...f, tickets_56b: "", tickets_56c: "", authority: "", students: "", infants: "" })));
     toast.info("تم تصفير جميع الخانات");
   };
 
@@ -1153,7 +1468,7 @@ const MedicalTicketsPage = () => {
     {
       key: "p",
       ctrl: true,
-      handler: () => window.print(),
+      handler: async () => { await ensureSignaturesLoaded(); executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }); },
       description: "طباعة",
     },
     {
@@ -1209,8 +1524,8 @@ const MedicalTicketsPage = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const supportedExportColumns = [
     { header: "العيادة/الجهة", accessor: "name" },
-    ...([1, 2, 3, 4].flatMap(w => categories.map(c => ({ header: `أسبوع ${w} - ${c}`, accessor: `w${w}_${c}` })))),
-    ...categories.map(c => ({ header: `إجمالي ${c}`, accessor: `total_${c}` })),
+    ...([1, 2, 3, 4].flatMap(w => supportedCategories.map(c => ({ header: `أسبوع ${w} - ${c}`, accessor: `w${w}_${c}` })))),
+    ...supportedCategories.map(c => ({ header: `إجمالي ${c}`, accessor: `total_${c}` })),
     { header: "الإجمالي العام", accessor: "total" },
   ];
 
@@ -1259,8 +1574,7 @@ const MedicalTicketsPage = () => {
         const totalAuth = allDataSupported.reduce((s, r) => s + (parseInt(r.total_هيئة) || 0), 0);
         const totalStud = allDataSupported.reduce((s, r) => s + (parseInt(r.total_طلاب) || 0), 0);
         const totalInf = allDataSupported.reduce((s, r) => s + (parseInt(r.total_رضع) || 0), 0);
-        const totalWoman = allDataSupported.reduce((s, r) => s + (parseInt(r['total_المرأة المعيلة']) || 0), 0);
-        const totalSupported = totalAuth + totalStud + totalInf + totalWoman;
+        const totalSupported = totalAuth + totalStud + totalInf;
         
         const globalOptions = {
           fileName: `medical_tickets_${hierarchy.dispenseMonth}`,
@@ -1283,6 +1597,107 @@ const MedicalTicketsPage = () => {
       if (type === 'pdf') { await exportToPDF(exportData, columns, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
       return false;
     } catch (err) { console.error(err); return false; }
+  };
+
+  // ── Entry-form quick export (weekly / monthly forms) ───────────────────
+  // Exports exactly what is typed in the current form (pre-save) with a
+  // totals row — same Excel/Word/PDF/print menu used everywhere else.
+  const formExportColumns = (() => {
+    if (entryMode === 'monthly') {
+      return isSupported
+        ? [
+            { header: 'الأسبوع', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : `أسبوع ${r.week}` },
+            { header: 'هيئة', exportAccessor: (r) => r.authority || 0 },
+            { header: 'طلاب', exportAccessor: (r) => r.students || 0 },
+            { header: 'رضع', exportAccessor: (r) => r.infants || 0 },
+          ]
+        : [
+            { header: 'الأسبوع', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : `أسبوع ${r.week}` },
+            { header: '56ب', exportAccessor: (r) => r.tickets_56b || 0 },
+            { header: '56ج', exportAccessor: (r) => r.tickets_56c || 0 },
+          ];
+    }
+    // weekly form — single row for the selected week
+    if (isSupported) {
+      return [
+        { header: 'الفترة', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : r.label },
+        { header: 'صباحي هيئة', exportAccessor: (r) => r.morning_authority || 0 },
+        { header: 'صباحي طلاب', exportAccessor: (r) => r.morning_students || 0 },
+        { header: 'صباحي رضع', exportAccessor: (r) => r.morning_infants || 0 },
+        { header: 'مسائي هيئة', exportAccessor: (r) => r.evening_authority || 0 },
+        { header: 'مسائي طلاب', exportAccessor: (r) => r.evening_students || 0 },
+        { header: 'مسائي رضع', exportAccessor: (r) => r.evening_infants || 0 },
+      ];
+    }
+    return [
+      { header: 'الفترة', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : r.label },
+      { header: 'صباحي 56ب', exportAccessor: (r) => r.morning_56b || 0 },
+      { header: 'صباحي 56ج', exportAccessor: (r) => r.morning_56c || 0 },
+      { header: 'مسائي 56ب', exportAccessor: (r) => r.evening_56b || 0 },
+      { header: 'مسائي 56ج', exportAccessor: (r) => r.evening_56c || 0 },
+    ];
+  })();
+
+  const formExportData = (() => {
+    if (entryMode === 'monthly') {
+      const rows = monthlyForm.map(item => ({
+        week: item.week,
+        tickets_56b: parseInt(item.tickets_56b) || 0,
+        tickets_56c: parseInt(item.tickets_56c) || 0,
+        authority: parseInt(item.authority) || 0,
+        students: parseInt(item.students) || 0,
+        infants: parseInt(item.infants) || 0,
+      }));
+      const totals = {
+        isTotalRow: true,
+        week: 'الإجمالي',
+        tickets_56b: rows.reduce((s, r) => s + r.tickets_56b, 0),
+        tickets_56c: rows.reduce((s, r) => s + r.tickets_56c, 0),
+        authority: rows.reduce((s, r) => s + r.authority, 0),
+        students: rows.reduce((s, r) => s + r.students, 0),
+        infants: rows.reduce((s, r) => s + r.infants, 0),
+      };
+      return [...rows, totals];
+    }
+    const row = isSupported
+      ? {
+          label: `الأسبوع ${selectedWeek}`,
+          morning_authority: parseInt(supportedWeeklyForm.morning_authority) || 0,
+          morning_students: parseInt(supportedWeeklyForm.morning_students) || 0,
+          morning_infants: parseInt(supportedWeeklyForm.morning_infants) || 0,
+          evening_authority: parseInt(supportedWeeklyForm.evening_authority) || 0,
+          evening_students: parseInt(supportedWeeklyForm.evening_students) || 0,
+          evening_infants: parseInt(supportedWeeklyForm.evening_infants) || 0,
+        }
+      : {
+          label: `الأسبوع ${selectedWeek}`,
+          morning_56b: parseInt(weeklyForm.morning_56b) || 0,
+          morning_56c: parseInt(weeklyForm.morning_56c) || 0,
+          evening_56b: parseInt(weeklyForm.evening_56b) || 0,
+          evening_56c: parseInt(weeklyForm.evening_56c) || 0,
+        };
+    const sum = (k) => row[k] || 0;
+    const totals = isSupported
+      ? {
+          isTotalRow: true,
+          label: 'الإجمالي',
+          morning_authority: sum('morning_authority'), morning_students: sum('morning_students'), morning_infants: sum('morning_infants'),
+          evening_authority: sum('evening_authority'), evening_students: sum('evening_students'), evening_infants: sum('evening_infants'),
+        }
+      : {
+          isTotalRow: true,
+          label: 'الإجمالي',
+          morning_56b: sum('morning_56b'), morning_56c: sum('morning_56c'),
+          evening_56b: sum('evening_56b'), evening_56c: sum('evening_56c'),
+        };
+    return [row, totals];
+  })();
+
+  const formExportOptions = {
+    title: `التذاكر الطبية ${isSupported ? 'المدعومة' : 'المجانية'} — ${entryMode === 'weekly' ? `أسبوع ${selectedWeek}` : 'شهري'}`,
+    fileName: `medical_tickets_${isSupported ? 'supported' : 'free'}_${entryMode}_${hierarchy.dispenseMonth}`,
+    subtitle: `${hierarchyNames.clinic || hierarchyNames.area || hierarchyNames.branch} — شهر ${hierarchy.dispenseMonth}`,
+    monthLabel: hierarchy.dispenseMonth,
   };
 
   return (
@@ -1309,7 +1724,9 @@ const MedicalTicketsPage = () => {
         <StatsBar items={statsItems} />
 
         {/* --- Selection Bar --- */}
-        <Card className="p-0 overflow-hidden border-none shadow-xl bg-gradient-to-r from-[var(--color-bg-card)] to-[var(--color-bg)]">
+        {/* NOTE: no overflow-hidden — it would clip the AutoComplete dropdowns
+            inside HierarchySelector (the list gets cut off mid-scroll). */}
+        <Card className="p-0 border-none shadow-xl bg-gradient-to-r from-[var(--color-bg-card)] to-[var(--color-bg)]">
           <div className="p-6 space-y-6">
             <div className="flex items-center gap-2 text-lg font-black text-[var(--color-primary)]">
               <Building2 size={22} />
@@ -1319,7 +1736,7 @@ const MedicalTicketsPage = () => {
             <div className="w-full">
               <HierarchySelector
                 onSelectionChange={(data) =>
-                  setHierarchy({ ...hierarchy, ...data })
+                  setHierarchy(prev => ({ ...prev, ...data }))
                 }
                 initialBranch={hierarchy.branchId}
                 initialArea={hierarchy.areaId}
@@ -1329,6 +1746,8 @@ const MedicalTicketsPage = () => {
                 disabled={isLocationFixed}
               />
             </div>
+
+            <LockBanner />
 
             <div className="flex flex-col md:flex-row items-center gap-8 pt-4 border-t border-[var(--color-border)]">
               <div className="flex items-center gap-4">
@@ -1391,20 +1810,20 @@ const MedicalTicketsPage = () => {
 
               <div className="flex items-center gap-4 bg-[var(--color-bg-card)]/40 p-1 rounded-2xl border border-[var(--color-border)]">
                 <button
-                  onClick={() => setEntryMode("weekly")}
+                  onClick={() => requestEntryModeSwitch("weekly")}
                   className={`px-6 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${entryMode === "weekly" ? "bg-[var(--color-bg-card)] text-[var(--color-primary)] shadow-md" : "opacity-60"}`}
                 >
                   <CalendarDays size={14} /> إدخال أسبوعي
                 </button>
                 <button
-                  onClick={() => setEntryMode("monthly")}
+                  onClick={() => requestEntryModeSwitch("monthly")}
                   className={`px-6 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${entryMode === "monthly" ? "bg-[var(--color-bg-card)] text-[var(--color-primary)] shadow-md" : "opacity-60"}`}
                 >
                   <CalendarRange size={14} /> إدخال شهري
                 </button>
                 {hierarchy.clinicId && (
                   <button
-                    onClick={() => setEntryMode("daily")}
+                    onClick={() => requestEntryModeSwitch("daily")}
                     className={`px-6 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${entryMode === "daily" ? "bg-[var(--color-bg-card)] text-[var(--color-primary)] shadow-md" : "opacity-60"}`}
                   >
                     <ClipboardList size={14} /> إدخال يومي
@@ -1412,7 +1831,7 @@ const MedicalTicketsPage = () => {
                 )}
                 {hierarchy.areaId && !hierarchy.clinicId && (
                   <button
-                    onClick={() => setEntryMode("quick_clinics")}
+                    onClick={() => requestEntryModeSwitch("quick_clinics")}
                     className={`px-6 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${entryMode === "quick_clinics" ? "bg-indigo-500 text-white shadow-md" : "opacity-60"}`}
                   >
                     <Layers size={14} /> إدخال سريع للعيادات
@@ -1428,6 +1847,7 @@ const MedicalTicketsPage = () => {
                     value={selectedCategory}
                     onChange={(e) => setSelectedCategory(e.target.value)}
                   >
+                    <option value="عام">عام (الكل)</option>
                     {categories.map((c) => (
                       <option key={c} value={c}>
                         {c}
@@ -1441,7 +1861,7 @@ const MedicalTicketsPage = () => {
 
           {/* --- Entry Form --- */}
           {entryMode === "quick_clinics" ? (
-             <MedicalTicketsGridEntry branchId={hierarchy.branchId} areaId={hierarchy.areaId} dispenseMonth={hierarchy.dispenseMonth} />
+              <MedicalTicketsGridEntry branchId={hierarchy.branchId} areaId={hierarchy.areaId} dispenseMonth={hierarchy.dispenseMonth} isLocked={isLocked} />
           ) : entryMode === "weekly" ? (
             <Card className="p-8 border-[var(--color-primary)]/20 shadow-2xl relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-primary)]/5 rounded-bl-full -mr-16 -mt-16 pointer-events-none" />
@@ -1482,6 +1902,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.morning_authority}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, morning_authority: e.target.value})}
+                          disabled={isLocked}
                         />
                         <Input
                           label="طلاب"
@@ -1490,6 +1911,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.morning_students}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, morning_students: e.target.value})}
+                          disabled={isLocked}
                         />
                         <Input
                           label="رضع"
@@ -1498,14 +1920,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.morning_infants}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, morning_infants: e.target.value})}
-                        />
-                        <Input
-                          label="المرأة المعيلة"
-                          hint="عدد تذاكر المرأة المعيلة"
-                          type="number"
-                          placeholder="0"
-                          value={supportedWeeklyForm.morning_woman}
-                          onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, morning_woman: e.target.value})}
+                          disabled={isLocked}
                         />
                       </div>
                     ) : (
@@ -1524,6 +1939,7 @@ const MedicalTicketsPage = () => {
                               morning_56b: e.target.value,
                             })
                           }
+                          disabled={isLocked}
                         />
                         <Input
                           label="تذاكر 56ج"
@@ -1538,6 +1954,7 @@ const MedicalTicketsPage = () => {
                               morning_56c: e.target.value,
                             })
                           }
+                          disabled={isLocked}
                         />
                       </div>
                     )}
@@ -1559,6 +1976,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.evening_authority}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, evening_authority: e.target.value})}
+                          disabled={isLocked}
                         />
                         <Input
                           label="طلاب"
@@ -1566,6 +1984,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.evening_students}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, evening_students: e.target.value})}
+                          disabled={isLocked}
                         />
                         <Input
                           label="رضع"
@@ -1573,13 +1992,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.evening_infants}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, evening_infants: e.target.value})}
-                        />
-                        <Input
-                          label="المرأة المعيلة"
-                          type="number"
-                          placeholder="0"
-                          value={supportedWeeklyForm.evening_woman}
-                          onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, evening_woman: e.target.value})}
+                          disabled={isLocked}
                         />
                       </div>
                     ) : (
@@ -1596,6 +2009,7 @@ const MedicalTicketsPage = () => {
                               evening_56b: e.target.value,
                             })
                           }
+                          disabled={isLocked}
                         />
                         <Input
                           label="تذاكر 56ج"
@@ -1609,6 +2023,7 @@ const MedicalTicketsPage = () => {
                               evening_56c: e.target.value,
                             })
                           }
+                          disabled={isLocked}
                         />
                       </div>
                     )}
@@ -1637,13 +2052,19 @@ const MedicalTicketsPage = () => {
                         evening_56c: "",
                       });
                       setSupportedWeeklyForm({
-                        morning_authority: "", morning_students: "", morning_infants: "", morning_woman: "",
-                        evening_authority: "", evening_students: "", evening_infants: "", evening_woman: ""
+                        morning_authority: "", morning_students: "", morning_infants: "",
+                        evening_authority: "", evening_students: "", evening_infants: ""
                       });
                     }}
                   >
                     إعادة تعيين
                   </Button>
+                  <ExportMenu
+                    data={formExportData}
+                    columns={formExportColumns}
+                    options={formExportOptions}
+                    disabled={saving}
+                  />
                   <Button
                     variant="primary"
                     icon={isLocked ? Lock : Save}
@@ -1684,10 +2105,12 @@ const MedicalTicketsPage = () => {
                             placeholder="0"
                             value={item.authority}
                             onChange={(e) => {
+                              monthlyEditedRef.current = true;
                               const next = [...monthlyForm];
                               next[idx].authority = e.target.value;
                               setMonthlyForm(next);
                             }}
+                            disabled={isLocked}
                           />
                           <Input
                             label="طلاب"
@@ -1695,10 +2118,12 @@ const MedicalTicketsPage = () => {
                             placeholder="0"
                             value={item.students}
                             onChange={(e) => {
+                              monthlyEditedRef.current = true;
                               const next = [...monthlyForm];
                               next[idx].students = e.target.value;
                               setMonthlyForm(next);
                             }}
+                            disabled={isLocked}
                           />
                           <Input
                             label="رضع"
@@ -1706,21 +2131,12 @@ const MedicalTicketsPage = () => {
                             placeholder="0"
                             value={item.infants}
                             onChange={(e) => {
+                              monthlyEditedRef.current = true;
                               const next = [...monthlyForm];
                               next[idx].infants = e.target.value;
                               setMonthlyForm(next);
                             }}
-                          />
-                          <Input
-                            label="المرأة المعيلة"
-                            type="number"
-                            placeholder="0"
-                            value={item.woman}
-                            onChange={(e) => {
-                              const next = [...monthlyForm];
-                              next[idx].woman = e.target.value;
-                              setMonthlyForm(next);
-                            }}
+                            disabled={isLocked}
                           />
                         </div>
                       ) : (
@@ -1731,10 +2147,12 @@ const MedicalTicketsPage = () => {
                             placeholder="0"
                             value={item.tickets_56b}
                             onChange={(e) => {
+                              monthlyEditedRef.current = true;
                               const next = [...monthlyForm];
                               next[idx].tickets_56b = e.target.value;
                               setMonthlyForm(next);
                             }}
+                            disabled={isLocked}
                           />
                           <Input
                             label="تذاكر 56ج"
@@ -1742,10 +2160,12 @@ const MedicalTicketsPage = () => {
                             placeholder="0"
                             value={item.tickets_56c}
                             onChange={(e) => {
+                              monthlyEditedRef.current = true;
                               const next = [...monthlyForm];
                               next[idx].tickets_56c = e.target.value;
                               setMonthlyForm(next);
                             }}
+                            disabled={isLocked}
                           />
                         </>
                       )}
@@ -1772,6 +2192,12 @@ const MedicalTicketsPage = () => {
                 >
                   إعادة تعيين
                 </Button>
+                <ExportMenu
+                  data={formExportData}
+                  columns={formExportColumns}
+                  options={formExportOptions}
+                  disabled={saving}
+                />
                 <Button
                   variant="success"
                   icon={isLocked ? Lock : Save}
@@ -1901,6 +2327,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.morning_authority}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, morning_authority: e.target.value})}
+                          disabled={isLocked}
                         />
                         <Input
                           label="طلاب"
@@ -1908,6 +2335,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.morning_students}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, morning_students: e.target.value})}
+                          disabled={isLocked}
                         />
                         <Input
                           label="رضع"
@@ -1915,6 +2343,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.morning_infants}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, morning_infants: e.target.value})}
+                          disabled={isLocked}
                         />
                       </div>
                     ) : (
@@ -1931,6 +2360,7 @@ const MedicalTicketsPage = () => {
                               morning_56b: e.target.value,
                             })
                           }
+                          disabled={isLocked}
                         />
                         <Input
                           label="تذاكر 56ج"
@@ -1944,6 +2374,7 @@ const MedicalTicketsPage = () => {
                               morning_56c: e.target.value,
                             })
                           }
+                          disabled={isLocked}
                         />
                       </div>
                     )}
@@ -1965,6 +2396,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.evening_authority}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, evening_authority: e.target.value})}
+                          disabled={isLocked}
                         />
                         <Input
                           label="طلاب"
@@ -1972,6 +2404,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.evening_students}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, evening_students: e.target.value})}
+                          disabled={isLocked}
                         />
                         <Input
                           label="رضع"
@@ -1979,6 +2412,7 @@ const MedicalTicketsPage = () => {
                           placeholder="0"
                           value={supportedWeeklyForm.evening_infants}
                           onChange={(e) => setSupportedWeeklyForm({...supportedWeeklyForm, evening_infants: e.target.value})}
+                          disabled={isLocked}
                         />
                       </div>
                     ) : (
@@ -1995,6 +2429,7 @@ const MedicalTicketsPage = () => {
                               evening_56b: e.target.value,
                             })
                           }
+                          disabled={isLocked}
                         />
                         <Input
                           label="تذاكر 56ج"
@@ -2008,6 +2443,7 @@ const MedicalTicketsPage = () => {
                               evening_56c: e.target.value,
                             })
                           }
+                          disabled={isLocked}
                         />
                       </div>
                     )}
@@ -2349,31 +2785,31 @@ const MedicalTicketsPage = () => {
                     </th>
                     <th
                       className="p-4 text-center border-x border-emerald-100"
-                      colSpan={4}
+                      colSpan={3}
                     >
                       الأول
                     </th>
                     <th
                       className="p-4 text-center border-x border-emerald-100"
-                      colSpan={4}
+                      colSpan={3}
                     >
                       الثاني
                     </th>
                     <th
                       className="p-4 text-center border-x border-emerald-100"
-                      colSpan={4}
+                      colSpan={3}
                     >
                       الثالث
                     </th>
                     <th
                       className="p-4 text-center border-x border-emerald-100"
-                      colSpan={4}
+                      colSpan={3}
                     >
                       الرابع
                     </th>
                     <th
                       className="p-4 text-center bg-emerald-100/30"
-                      colSpan={5}
+                      colSpan={4}
                     >
                       الإجمالي العام
                     </th>
@@ -2424,9 +2860,6 @@ const MedicalTicketsPage = () => {
                           <td className="p-4 text-center border-x font-mono">
                             {row[`w${w}_رضع`]}
                           </td>
-                          <td className="p-4 text-center border-x font-mono text-fuchsia-600/80">
-                            {row[`w${w}_المرأة المعيلة`]}
-                          </td>
                         </React.Fragment>
                       ))}
                       <td className="p-4 text-center font-black text-blue-600 bg-blue-50/10">
@@ -2437,9 +2870,6 @@ const MedicalTicketsPage = () => {
                       </td>
                       <td className="p-4 text-center font-black text-amber-600 bg-amber-50/10">
                         {row.total_رضع?.toLocaleString() || 0}
-                      </td>
-                      <td className="p-4 text-center font-black text-fuchsia-600 bg-fuchsia-50/10">
-                        {row['total_المرأة المعيلة']?.toLocaleString() || 0}
                       </td>
                       <td className="p-4 text-center bg-emerald-100/20 font-black text-emerald-700">
                         {row.total.toLocaleString()}
@@ -2478,7 +2908,7 @@ const MedicalTicketsPage = () => {
                     </td>
                     {[1, 2, 3, 4].map((w) => {
                       const allData = getProcessedData(true).data;
-                      return ["هيئة", "طلاب", "رضع", "المرأة المعيلة"].map((cat) => {
+                      return supportedCategories.map((cat) => {
                         const sum = allData.reduce((s, r) => s + (parseInt(r[`w${w}_${cat}`]) || 0), 0);
                         return (
                           <td key={`${w}_${cat}`} className="p-4 text-center border-x font-black">
@@ -2495,9 +2925,6 @@ const MedicalTicketsPage = () => {
                     </td>
                     <td className="p-4 text-center font-black text-amber-600 bg-amber-50/10">
                       {getProcessedData(true).data.reduce((s, r) => s + (parseInt(r.total_رضع) || 0), 0)}
-                    </td>
-                    <td className="p-4 text-center font-black text-fuchsia-600 bg-fuchsia-50/10">
-                      {getProcessedData(true).data.reduce((s, r) => s + (parseInt(r['total_المرأة المعيلة']) || 0), 0)}
                     </td>
                     <td className="p-4 text-center bg-[var(--color-primary)]/10 font-black text-[var(--color-primary)]">
                       {getProcessedData(true).data.reduce((s, r) => s + (parseInt(r.total) || 0), 0)}
@@ -2621,6 +3048,35 @@ const MedicalTicketsPage = () => {
         </div>
         )}
       </div>
+
+      {/* Duplicate / overwrite confirmation (mirrors quick entry) */}
+      <ConfirmModal
+        isOpen={!!pendingConflict}
+        onConfirm={confirmOverwrite}
+        onCancel={() => setPendingConflict(null)}
+        onSkip={skipConflicts}
+        skipText="تجاوز وحفظ الباقي"
+        title="تم إدخال الفترة من قبل"
+        message={
+          pendingConflict
+            ? [
+                pendingConflict.labels.length > 0
+                  ? `الفترات التالية مدخلة من قبل بقيم مختلفة: ${pendingConflict.labels.join('، ')}.`
+                  : '',
+                pendingConflict.generalWarnings.length > 0
+                  ? `تنبيه: ${pendingConflict.generalWarnings.join(' — ')}.`
+                  : '',
+              ]
+                .filter(Boolean)
+                .join(' ')
+            : ''
+        }
+        detail="يمكنك الذهاب للتعديل إذا كنت تريد تغيير البيانات — هل تريد استبدال القيم الحالية؟"
+        confirmText="استبدال البيانات"
+        cancelText="إلغاء"
+        variant="warning"
+        loading={saving}
+      />
     </div>
   );
 };

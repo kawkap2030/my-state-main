@@ -130,8 +130,14 @@ const DataQualityPage = () => {
         }, { fileName: 'data_quality_report', title: 'تقرير جودة البيانات' });
         return true;
       }
-      if (type === 'word') { exportToWord(monthRows, monthCols, exportOptions); return true; }
-      if (type === 'pdf') { await exportToPDF(monthRows, monthCols, exportOptions); return true; }
+      // Word/PDF: mirror the Excel sheets as separate titled tables
+      const multiTables = [
+        { data: monthRows, columns: monthCols, title: 'جودة الشهور' },
+        { data: missingRows, columns: missingCols, title: 'العيادات المفقودة' },
+      ];
+      const wordPdfOptions = { ...exportOptions, tables: multiTables };
+      if (type === 'word') { exportToWord(monthRows, monthCols, wordPdfOptions); return true; }
+      if (type === 'pdf') { await exportToPDF(monthRows, monthCols, wordPdfOptions); return true; }
       return false;
     } catch (e) {
       toast.error(`فشل التصدير: ${e.message || e}`);

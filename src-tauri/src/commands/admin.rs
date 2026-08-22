@@ -116,6 +116,63 @@ fn unzip_db(zip_path: &Path, temp_restore_dir: &Path) -> std::result::Result<Pat
     Err("No database file found in the zip backup".to_string())
 }
 
+/// Validate database integrity and schema tables
+fn validate_database_schema(target_db_path: &Path) -> std::result::Result<(), String> {
+    if !target_db_path.exists() {
+        return Err("ملف قاعدة البيانات المستخرج غير موجود".to_string());
+    }
+
+    let conn = rusqlite::Connection::open(target_db_path)
+        .map_err(|e| format!("فشل في فتح ملف قاعدة البيانات: {}", e))?;
+
+    // 1. Integrity check
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .map_err(|e| format!("فشل في فحص سلامة ملف قاعدة البيانات: {}", e))?;
+
+    if integrity != "ok" {
+        return Err(format!("قاعدة البيانات غير سليمة أو تالفة (نتيجة الفحص: {})", integrity));
+    }
+
+    // 2. Schema tables check
+    let required_tables = vec![
+        "users",
+        "branches",
+        "areas",
+        "clinics",
+        "drug_categories",
+        "drugs",
+        "drug_groups",
+        "detailed_drug_dispensed",
+        "insulin_dispensed",
+        "monthly_drugs_dispensed",
+    ];
+
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .map_err(|e| format!("فشل في قراءة ملامح قاعدة البيانات: {}", e))?;
+
+    let existing_tables: std::collections::HashSet<String> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .collect();
+
+    let missing_tables: Vec<&str> = required_tables
+        .into_iter()
+        .filter(|t| !existing_tables.contains(*t))
+        .collect();
+
+    if !missing_tables.is_empty() {
+        return Err(format!(
+            "ملف قاعدة البيانات غير متوافق مع المخطط (Schema). الجداول المفقودة: {:?}",
+            missing_tables
+        ));
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_backup_files() -> std::result::Result<Vec<BackupFileInfo>, String> {
     let (_, backups_dir) = get_db_and_backups_paths()?;
@@ -191,38 +248,83 @@ pub async fn restore_backup(state: State<'_, AppState>, filename: String) -> std
         return Err("الملف غير موجود".to_string());
     }
 
-    // 1. Precautionary backup
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let current_backup_zip_filename = format!("medicine_dispenser_backup_pre_restore_{}.zip", timestamp);
-    let current_backup_zip_path = backups_dir.join(&current_backup_zip_filename);
-    zip_db(&db_path, &current_backup_zip_path, "medicine_dispenser.db")?;
-
-    // 2. Lock db and set connection to None
-    let mut conn_guard = state.db.lock().map_err(|e| e.to_string())?;
-    *conn_guard = None;
-
-    // 3. Extract to temp
+    // 1. Extract to temp directory
     let temp_restore_dir = backups_dir.join("temp_restore");
     if temp_restore_dir.exists() {
         std::fs::remove_dir_all(&temp_restore_dir).ok();
     }
     std::fs::create_dir_all(&temp_restore_dir).map_err(|e| e.to_string())?;
-    
-    let extracted_db_path = unzip_db(&zip_path, &temp_restore_dir)?;
 
-    // 4. Overwrite
+    let extracted_db_path = match unzip_db(&zip_path, &temp_restore_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&temp_restore_dir);
+            return Err(e);
+        }
+    };
+
+    // 2. Validate schema & integrity BEFORE overwriting current DB
+    if let Err(e) = validate_database_schema(&extracted_db_path) {
+        let _ = std::fs::remove_dir_all(&temp_restore_dir);
+        return Err(format!("فشل في استعادة النسخة: {}", e));
+    }
+
+    // 3. Precautionary backup BEFORE overwriting
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let current_backup_zip_filename = format!("medicine_dispenser_backup_pre_restore_{}.zip", timestamp);
+    let current_backup_zip_path = backups_dir.join(&current_backup_zip_filename);
+    zip_db(&db_path, &current_backup_zip_path, "medicine_dispenser.db")?;
+
+    // 4. Lock db and set connection to None
+    let mut conn_guard = state.db.lock().map_err(|e| e.to_string())?;
+    *conn_guard = None;
+
+    // 5. Overwrite main DB
     std::fs::copy(&extracted_db_path, &db_path).map_err(|e| format!("Failed to copy database file: {}", e))?;
 
-    // 5. Clean up
+    // 6. Clean up temp
     std::fs::remove_dir_all(&temp_restore_dir).ok();
 
-    // 6. Re-open
+    // 7. Re-open connection and HEALTH-GATE the restored DB BEFORE any
+    // write touches it — a corrupted backup must never be silently accepted
+    // nor cleared the warning banner.
     let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to re-open database connection: {}", e))?;
-    conn.execute("PRAGMA foreign_keys = ON", []).map_err(|e| e.to_string())?;
+    let restored_check: String = conn
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .unwrap_or_else(|_| "check-failed".to_string());
 
-    *conn_guard = Some(conn);
-
-    Ok(())
+    if restored_check == "ok" {
+        // Healthy restore: apply idempotent schema (IF NOT EXISTS) + FK, then
+        // clear the startup health-gate warning so the banner disappears.
+        let schema = include_str!("../../../schema.sql");
+        let _ = conn.execute_batch(schema);
+        conn.execute("PRAGMA foreign_keys = ON", []).map_err(|e| e.to_string())?;
+        if let Ok(mut err_lock) = state.db_error.lock() {
+            *err_lock = None;
+        }
+        *conn_guard = Some(conn);
+        Ok(())
+    } else {
+        // Corrupt restored file: fail the restore with an ACCURATE message.
+        // The main DB file was already overwritten by the restore attempt, so
+        // the previous data now lives ONLY in the pre-restore backup created
+        // above — point the user at it explicitly. The failed copy is never
+        // placed into the connection slot (app stops operating on it), and the
+        // warning banner stays visible until a healthy DB is restored.
+        let msg = format!(
+            "فشل الاستعادة: قاعدة البيانات المستعادة غير سليمة (نتيجة الفحص: {}). تم إنشاء نسخة احتياطية من بياناتك السابقة باسم {} — يمكنك استعادتها من شاشة النسخ الاحتياطي، أو المحاولة بنسخة أخرى.",
+            restored_check, current_backup_zip_filename
+        );
+        eprintln!("[admin] restored DB quick_check failed: {} — pre-restore backup: {}", restored_check, current_backup_zip_filename);
+        // Keep the (read-only) failed copy out of the connection slot so the
+        // app never operates on it; the pre-restore backup remains on disk.
+        let _ = conn.execute("PRAGMA query_only = ON", []);
+        *conn_guard = None;
+        if let Ok(mut err_lock) = state.db_error.lock() {
+            *err_lock = Some("تعذر التحقق من سلامة قاعدة البيانات المستعادة. تم إيقاف العمليات التي قد تؤثر على البيانات حفاظًا عليها. استعد النسخة الاحتياطية السابقة من شاشة النسخ الاحتياطي.".to_string());
+        }
+        Err(msg)
+    }
 }
 
 #[tauri::command]
@@ -240,7 +342,7 @@ pub async fn get_data_management_summary(state: State<'_, AppState>) -> std::res
         "monthly_drugs_dispensed", "supply_categories", "supplies",
         "monthly_supplies_dispensed", "medical_tickets",
         "users", "audit_log", "dispensing_month_isolation", "manual_locked_months",
-        "scheduled_reports", "scheduled_report_history", "report_signatures", "export_presets"
+        "scheduled_reports", "scheduled_report_history", "export_presets"
     ];
     
     let mut table_counts = std::collections::HashMap::new();
@@ -414,20 +516,16 @@ pub async fn clear_data(
                 conn.execute(seq_query, [table]).ok();
             }
 
-            // ✅ حماية حساب المدير: إعادة إنشاء مستخدم admin بعد المسح
-            conn.execute(
-                "INSERT INTO users (username, password_hash, role) VALUES ('admin', 'admin', 'admin')",
-                []
-            ).map_err(|e| format!("Failed to re-create admin user: {}", e))?;
-
+            // 🔐 NO default admin is re-created here. After a full reset the
+            // users table is empty, so the First-Run Setup screen appears on
+            // the next login and the administrator creates a NEW account with
+            // their own password — no hard-coded admin/admin credential ever.
+            // A default branch is re-seeded because dispensing rows require a
+            // branch_id. Drug categories are NOT auto-seeded: they are
+            // reference data the administrator recreates via the UI.
             conn.execute("INSERT INTO branches (name) VALUES ('الفرع الرئيسي')", []).map_err(|e| e.to_string())?;
-            conn.execute("INSERT INTO drug_categories (name) VALUES ('مضادات حيوية')", []).ok();
-            conn.execute("INSERT INTO drug_categories (name) VALUES ('مسكنات')", []).ok();
-            conn.execute("INSERT INTO drug_categories (name) VALUES ('أدوية القلب')", []).ok();
-            conn.execute("INSERT INTO drug_categories (name) VALUES ('أدوية السكري')", []).ok();
-            conn.execute("INSERT INTO drug_categories (name) VALUES ('أدوية الضغط')", []).ok();
 
-            Ok(format!("تم تفريغ جميع البيانات بنجاح وإعادة ضبط المصنع (تم الحفاظ على حساب المدير). تم إنشاء نسخة احتياطية تلقائية: {}", auto_backup_filename))
+            Ok(format!("تم تفريغ جميع البيانات بنجاح وإعادة ضبط المصنع. سيظهر إعداد أول تشغيل لإنشاء حساب المدير عند تسجيل الدخول التالي. تم إنشاء نسخة احتياطية تلقائية: {}", auto_backup_filename))
         }
         "custom" => {
             let tables = selected_tables.ok_or("لم يتم تحديد أي جداول للتفريغ")?;
@@ -620,31 +718,87 @@ pub async fn check_db_integrity(state: State<'_, AppState>) -> std::result::Resu
     Ok(result)
 }
 
-/// 3. Import a backup from an external path (copy ZIP into backups folder)
+/// Backend DB health — lets the frontend show a PERSISTENT, user-visible
+/// warning when the database failed its startup health gate (open failure or
+/// integrity check). The connection may still be present (read-only) so the
+/// app stays usable while the message is displayed.
+#[derive(serde::Serialize)]
+pub struct DbStatus {
+    pub healthy: bool,
+    pub error: Option<String>,
+}
+
 #[tauri::command]
-pub async fn import_backup(source_path: String) -> std::result::Result<String, String> {
-    let src = Path::new(&source_path);
-    if !src.exists() {
+pub fn get_db_status(state: State<'_, AppState>) -> std::result::Result<DbStatus, String> {
+    let err_lock = state.db_error.lock().map_err(|e| e.to_string())?;
+    Ok(DbStatus {
+        healthy: err_lock.is_none(),
+        error: err_lock.clone(),
+    })
+}
+
+/// 3. Import a backup from an external path (or pick file via native dialog if path is empty)
+#[tauri::command]
+pub async fn import_backup(source_path: Option<String>) -> std::result::Result<String, String> {
+    let chosen_path = match source_path.filter(|s| !s.trim().is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let path = rfd::FileDialog::new()
+                .add_filter("ملف مضغوط (*.zip)", &["zip"])
+                .pick_file()
+                .ok_or("تم إلغاء اختيار الملف".to_string())?;
+            path
+        }
+    };
+
+    if !chosen_path.exists() {
         return Err("الملف المحدد غير موجود".to_string());
     }
-    if src.extension().and_then(|s| s.to_str()) != Some("zip") {
+    if chosen_path.extension().and_then(|s| s.to_str()) != Some("zip") {
         return Err("يجب اختيار ملف بصيغة ZIP فقط".to_string());
     }
-    
+
     let (_, backups_dir) = get_db_and_backups_paths()?;
-    let filename = src.file_name().ok_or("اسم الملف غير صالح")?.to_string_lossy().into_owned();
-    
-    // Avoid overwriting: if file exists, add timestamp
+
+    // Extract to temp directory to validate DB integrity and schema
+    let temp_import_dir = backups_dir.join("temp_import_validation");
+    if temp_import_dir.exists() {
+        let _ = std::fs::remove_dir_all(&temp_import_dir);
+    }
+    std::fs::create_dir_all(&temp_import_dir).map_err(|e| e.to_string())?;
+
+    let extracted_db_path = match unzip_db(&chosen_path, &temp_import_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&temp_import_dir);
+            return Err(format!("فشل في قراءة ملف الـ ZIP: {}", e));
+        }
+    };
+
+    if let Err(e) = validate_database_schema(&extracted_db_path) {
+        let _ = std::fs::remove_dir_all(&temp_import_dir);
+        return Err(format!("الملف غير صالح للاستيراد: {}", e));
+    }
+
+    let _ = std::fs::remove_dir_all(&temp_import_dir);
+
+    // Generate non-conflicting destination filename
+    let filename = chosen_path
+        .file_name()
+        .ok_or("اسم الملف غير صالح".to_string())?
+        .to_string_lossy()
+        .into_owned();
+
     let dest_filename = if backups_dir.join(&filename).exists() {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-        let stem = src.file_stem().unwrap_or_default().to_string_lossy();
+        let stem = chosen_path.file_stem().unwrap_or_default().to_string_lossy();
         format!("{}_{}.zip", stem, timestamp)
     } else {
         filename
     };
-    
+
     let dest = backups_dir.join(&dest_filename);
-    std::fs::copy(src, &dest).map_err(|e| format!("فشل في نسخ الملف: {}", e))?;
+    std::fs::copy(&chosen_path, &dest).map_err(|e| format!("فشل في نسخ الملف إلى مجلد النسخ: {}", e))?;
     Ok(dest_filename)
 }
 
@@ -980,5 +1134,26 @@ pub async fn write_binary_file(path: String, contents: Vec<u8>) -> std::result::
         .ok();
 
     Ok(())
+}
+
+/// Delete a file from disk (used when a scheduled report is cancelled after
+/// the PDF was already written, or to clean up stray outputs).
+#[tauri::command]
+pub async fn delete_file(path: String) -> std::result::Result<(), String> {
+    let file_path = Path::new(&path);
+    if file_path.exists() {
+        std::fs::remove_file(file_path).map_err(|e| format!("فشل في حذف الملف: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Open a native folder picker and return the chosen folder path.
+/// Returns None when the user cancels.
+#[tauri::command]
+pub async fn pick_folder() -> std::result::Result<Option<String>, String> {
+    let path = rfd::FileDialog::new()
+        .set_title("اختر مجلد الإخراج")
+        .pick_folder();
+    Ok(path.map(|p| p.to_string_lossy().into_owned()))
 }
 

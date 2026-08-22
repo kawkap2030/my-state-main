@@ -33,11 +33,14 @@ import Pagination from "../../../components/ui/Pagination";
 import ConfirmModal from "../../../components/ui/ConfirmModal";
 import useKeyboardShortcuts from "../../../hooks/useKeyboardShortcuts";
 import PrintableTable from "../../../components/common/PrintableTable";
+import { buildHierarchyLabel } from "../../../utils/reportUtils";
 import StatsBar from "../../../components/common/StatsBar";
 import ExportMenu from "../../../components/ui/ExportMenu";
+import { executePrint } from "../../../utils/exportPrint";
+import useLockGuard from "../../../hooks/useLockGuard";
 
 const GroupCostsPage = () => {
-  const { hierarchyNames, activeHierarchy, checkIsMonthLocked } = useGlobalApp();
+  const { hierarchyNames, activeHierarchy, workspaceMode, checkIsMonthLocked } = useGlobalApp();
   const toast = useToast();
   const location = useLocation();
   const [hierarchy, setHierarchy] = useState({
@@ -74,13 +77,13 @@ const GroupCostsPage = () => {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  const isLocked = checkIsMonthLocked(hierarchy.dispenseMonth);
+  const { isLocked, LockBanner } = useLockGuard(hierarchy.dispenseMonth);
 
   useKeyboardShortcuts([
     {
       key: "p",
       ctrl: true,
-      handler: () => window.print(),
+      handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }),
       description: "طباعة",
     },
     {
@@ -143,8 +146,8 @@ const GroupCostsPage = () => {
     try {
       const records = await invoke("get_exact_drug_groups", {
         branchId: parseInt(hierarchy.branchId),
-        areaId: null,
-        clinicId: null,
+        areaId: hierarchy.areaId ? parseInt(hierarchy.areaId) : null,
+        clinicId: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,
         dispenseMonth: hierarchy.dispenseMonth,
       });
       // Map 'name' to 'groupName' to match our Table columns if needed, or just keep as name
@@ -284,8 +287,15 @@ const GroupCostsPage = () => {
         }),
       ]);
 
+      if (!Array.isArray(allCodes) || allCodes.length === 0) {
+        setBulkData([]);
+        toast.info("لا توجد مجموعات مسجلة بعد");
+        return;
+      }
+
+      const recordsList = Array.isArray(existingRecords) ? existingRecords : [];
       const initialBulk = allCodes.map((code) => {
-        const existing = existingRecords.find(
+        const existing = recordsList.find(
           (r) => r.group_code_id === code.id,
         );
         const costStr =
@@ -298,7 +308,7 @@ const GroupCostsPage = () => {
         };
       });
       setBulkData(initialBulk);
-      toast.success("تم تحميل قائمة المجموعات");
+      toast.success("تم تحميل قائمة المجموعات بنجاح");
       // Focus first input after a short delay
       setTimeout(() => {
         const firstInput = document.querySelector('input[type="number"]');
@@ -349,7 +359,7 @@ const GroupCostsPage = () => {
 
       if (result.skipped_names && result.skipped_names.length > 0) {
         toast.warning(
-          `تم حفظ ${result.saved_count} بنجاح، وتخطي ${result.skipped_names.length} مجموعة لوجودها مسبقاً وهي:\n${result.skipped_names.join(" ، ")}`,
+          `تم حفظ ${result.saved_count} بنجاح، وتخطي ${result.skipped_names.length} مجموعة وهي:\n${result.skipped_names.join(" ، ")}`,
           { duration: 8000 },
         );
       } else {
@@ -382,17 +392,20 @@ const GroupCostsPage = () => {
           <History size={18} />
           <span>آخر التكاليف المسجلة</span>
           <ExportMenu 
-            data={history} 
+            data={displayHistory} 
             columns={[
-              { header: "المجموعة", accessor: "group_name" },
-              { header: "الفرع", accessor: "branch_name" },
+              { header: "المجموعة", accessor: "groupName" },
+              { 
+                header: hierarchy.clinicId ? "العيادة" : hierarchy.areaId ? "المنطقة" : "الفرع", 
+                accessor: () => hierarchy.clinicId ? (hierarchyNames.clinic || "") : hierarchy.areaId ? (hierarchyNames.area || "") : (hierarchyNames.branch || "")
+              },
               { header: "الشهر", accessor: "dispense_month" },
-              { header: "التكلفة", accessor: (r) => parseFloat(r.total_cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+              { header: "التكلفة", accessor: (r) => parseFloat(r.cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
             ]} 
             options={{ 
               title: 'تكاليف المجموعات', 
               fileName: `group_costs_${hierarchy.dispenseMonth}`,
-              hierarchyLabel: `الفرع: ${hierarchy.branchId} | شهر: ${hierarchy.dispenseMonth}`
+              hierarchyLabel: `${hierarchy.clinicId ? "العيادة" : hierarchy.areaId ? "المنطقة" : "الفرع"}: ${hierarchy.clinicId ? (hierarchyNames.clinic || "") : hierarchy.areaId ? (hierarchyNames.area || "") : (hierarchyNames.branch || "")} | شهر: ${hierarchy.dispenseMonth}`
             }} 
           />
         </div>
@@ -477,6 +490,10 @@ const GroupCostsPage = () => {
           <Table
             columns={[
               { header: "المجموعة", accessor: "groupName" },
+              {
+                header: hierarchy.clinicId ? "العيادة" : hierarchy.areaId ? "المنطقة" : "الفرع",
+                accessor: () => hierarchy.clinicId ? (hierarchyNames.clinic || "") : hierarchy.areaId ? (hierarchyNames.area || "") : (hierarchyNames.branch || ""),
+              },
               { header: "الشهر", accessor: "dispense_month" },
               {
                 header: "التكلفة",
@@ -494,7 +511,7 @@ const GroupCostsPage = () => {
             onDelete={!isLocked ? handleDelete : undefined}
             footer={
               <tr className="bg-[var(--color-bg-card)] border-t-2 border-[var(--color-border)] font-black text-[var(--color-text)]">
-                <td colSpan="2" className="p-4 text-right">
+                <td colSpan="3" className="p-4 text-right">
                   الإجمالي المفلتر ({displayHistory.length} سجل):
                 </td>
                 <td className="p-4 text-emerald-600">
@@ -503,7 +520,6 @@ const GroupCostsPage = () => {
                     .toLocaleString()}{" "}
                   ج.م
                 </td>
-                <td colSpan="1"></td>
               </tr>
             }
           />
@@ -512,14 +528,16 @@ const GroupCostsPage = () => {
         {/* Print Only Version (Full Data) */}
         <div className="hidden print:block">
           <PrintableTable
-            title="تقرير تكلفة المجموعات الدوائية"
-            subtitle={`الشهر: ${hierarchy.dispenseMonth} - الفرع: ${
-              activeHierarchy.branchName || "جميع الفروع"
-            }`}
+            title="تقرير تكلفة المجموعات الدوائية"              subtitle={`الشهر: ${hierarchy.dispenseMonth}`}
+              hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}
           >
             <Table
               columns={[
                 { header: "المجموعة", accessor: "groupName" },
+                {
+                  header: hierarchy.clinicId ? "العيادة" : hierarchy.areaId ? "المنطقة" : "الفرع",
+                  accessor: () => hierarchy.clinicId ? (hierarchyNames.clinic || "") : hierarchy.areaId ? (hierarchyNames.area || "") : (hierarchyNames.branch || ""),
+                },
                 { header: "الشهر", accessor: "dispense_month" },
                 {
                   header: "التكلفة",
@@ -534,7 +552,7 @@ const GroupCostsPage = () => {
               data={displayHistory}
               footer={
                 <tr className="font-black border-t-2 border-black">
-                  <td colSpan="2" className="p-2 text-right">
+                  <td colSpan="3" className="p-2 text-right">
                     الإجمالي العام:
                   </td>
                   <td className="p-2">
@@ -590,12 +608,14 @@ const GroupCostsPage = () => {
         />
 
         <HierarchySelector
-          onSelectionChange={(data) => setHierarchy({ ...hierarchy, ...data })}
+          onSelectionChange={(data) => setHierarchy(prev => ({ ...prev, ...data }))}
           initialBranch={hierarchy.branchId}
           initialArea={hierarchy.areaId}
           initialClinic={hierarchy.clinicId}
           initialMonth={hierarchy.dispenseMonth}
         />
+
+        <LockBanner />
       </div>
 
       <div className="space-y-6 max-w-5xl mx-auto">
@@ -612,6 +632,7 @@ const GroupCostsPage = () => {
                 }
                 placeholder="ابحث عن مجموعة دوائية..."
                 data-focus="first-input"
+                disabled={isLocked}
               />
               <Input
                 label="التكلفة الإجمالية"
@@ -623,6 +644,7 @@ const GroupCostsPage = () => {
                   setFormData({ ...formData, cost: e.target.value })
                 }
                 required
+                disabled={isLocked}
               />
             </div>
 

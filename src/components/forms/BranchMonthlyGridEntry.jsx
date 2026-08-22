@@ -97,11 +97,11 @@ const BranchMonthlyGridEntry = ({ branchId, dispenseMonth }) => {
     try {
       for (const row of data) {
         // Skip if all values are 0 and no record exists
-        const sum = row.drugs_free_authority + row.drugs_free_students + row.drugs_free_infants + 
-                   row.drugs_free_breadwinner_women + row.drugs_supported_authority_value + 
-                   row.drugs_supported_authority_patient_share + row.drugs_supported_students_value + 
-                   row.drugs_supported_students_patient_share + row.drugs_supported_infants_value + 
-                   row.drugs_supported_infants_patient_share;
+        const sum = (parseFloat(row.drugs_free_authority) || 0) + (parseFloat(row.drugs_free_students) || 0) + (parseFloat(row.drugs_free_infants) || 0) + 
+                   (parseFloat(row.drugs_free_breadwinner_women) || 0) + (parseFloat(row.drugs_supported_authority_value) || 0) + 
+                   (parseFloat(row.drugs_supported_authority_patient_share) || 0) + (parseFloat(row.drugs_supported_students_value) || 0) + 
+                   (parseFloat(row.drugs_supported_students_patient_share) || 0) + (parseFloat(row.drugs_supported_infants_value) || 0) + 
+                   (parseFloat(row.drugs_supported_infants_patient_share) || 0);
         
         if (sum === 0 && !row.recordId) continue;
 
@@ -171,6 +171,10 @@ const BranchMonthlyGridEntry = ({ branchId, dispenseMonth }) => {
               <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50">مرأة (مجاني)</th>
               <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">هيئة (مدعم - قيمة)</th>
               <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">هيئة (مدعم - مساهمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">طلاب (مدعم - قيمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">طلاب (مدعم - مساهمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">رضع (مدعم - قيمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">رضع (مدعم - مساهمة)</th>
             </tr>
           </thead>
           <tbody className="bg-[var(--color-bg)]">
@@ -197,6 +201,18 @@ const BranchMonthlyGridEntry = ({ branchId, dispenseMonth }) => {
                 </td>
                 <td className="p-1">
                   <input type="number" value={row.drugs_supported_authority_patient_share} onChange={e => handleInputChange(idx, 'drugs_supported_authority_patient_share', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                </td>
+                <td className="p-1">
+                  <input type="number" value={row.drugs_supported_students_value} onChange={e => handleInputChange(idx, 'drugs_supported_students_value', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                </td>
+                <td className="p-1">
+                  <input type="number" value={row.drugs_supported_students_patient_share} onChange={e => handleInputChange(idx, 'drugs_supported_students_patient_share', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                </td>
+                <td className="p-1">
+                  <input type="number" value={row.drugs_supported_infants_value} onChange={e => handleInputChange(idx, 'drugs_supported_infants_value', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                </td>
+                <td className="p-1">
+                  <input type="number" value={row.drugs_supported_infants_patient_share} onChange={e => handleInputChange(idx, 'drugs_supported_infants_patient_share', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
                 </td>
               </tr>
             ))}

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'viewer', -- 'admin', 'data_entry', 'viewer'
+    recovery_hash TEXT,                 -- Argon2id hash of the one-time recovery code (NULL = not configured)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -322,14 +323,6 @@ CREATE TABLE IF NOT EXISTS manual_locked_months (
     locked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS report_signatures (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    preparer_name TEXT NOT NULL DEFAULT '',
-    manager_name TEXT NOT NULL DEFAULT '',
-    approval_number TEXT NOT NULL DEFAULT '',
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS export_presets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -353,7 +346,8 @@ CREATE TABLE IF NOT EXISTS scheduled_reports (
     name TEXT NOT NULL,
     report_type TEXT NOT NULL DEFAULT 'analytical',
     schedule_type TEXT NOT NULL DEFAULT 'monthly',
-    day_of_month INTEGER NOT NULL DEFAULT 1,
+    day_from INTEGER NOT NULL DEFAULT 1,
+    day_to INTEGER NOT NULL DEFAULT 28,
     output_folder TEXT NOT NULL DEFAULT '',
     branch_id INTEGER,
     area_id INTEGER,

@@ -2,8 +2,17 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { isMonthLocked } from '../utils/dateUtils';
 import invoke from '../api/tauriApi';
 import { GlobalAppContext } from './AppContext';
+import { useAuth } from './AuthContext';
 
 export const GlobalAppProvider = ({ children }) => {
+  let currentUser = null;
+  try {
+    const auth = useAuth();
+    currentUser = auth?.user;
+  } catch (_) {
+    currentUser = null;
+  }
+
   // ── Theme State with System Preference Detection ──────────────────────
   const getInitialTheme = () => {
     const saved = localStorage.getItem('theme');
@@ -32,16 +41,36 @@ export const GlobalAppProvider = ({ children }) => {
   // Exception for Monthly Totals to allow Clinic level on Branch/Area lock
   const [isIsolationExceptionActive, setIsIsolationExceptionActive] = useState(false);
 
-  useEffect(() => {
-    // Initial fetch of manual locks
-    invoke('get_manual_locked_months').then(data => {
-        const map = {};
+  // ── Auto Lock Evaluation & Manual Lock Synchronization ──────────────────
+  const reloadLocks = useCallback(async () => {
+    try {
+      const data = await invoke('get_manual_locked_months');
+      const map = {};
+      if (Array.isArray(data)) {
         data.forEach(([month, isLocked]) => {
-            map[month] = isLocked;
+          map[month] = isLocked;
         });
-        setManualLockedMonths(map);
-    }).catch(err => console.error("Failed to load manual locks:", err));
+      }
+      setManualLockedMonths(map);
+      setIsMasterUnlocked(false);
+    } catch (err) {
+      console.error("Failed to load manual locks:", err);
+    }
   }, []);
+
+  const prevUserRef = useRef(currentUser);
+
+  // Initial fetch on mount & re-evaluation on successful login / logout
+  useEffect(() => {
+    reloadLocks();
+  }, [reloadLocks]);
+
+  useEffect(() => {
+    if (prevUserRef.current !== currentUser) {
+      prevUserRef.current = currentUser;
+      reloadLocks();
+    }
+  }, [currentUser, reloadLocks]);
 
   const checkIsMonthLocked = useCallback((monthStr) => {
     if (isMasterUnlocked) return false;
@@ -123,26 +152,21 @@ export const GlobalAppProvider = ({ children }) => {
     });
   }, []);
 
-  // ── Auto-backup on startup ──────────────────────────────────────
-  const [lastStartupBackup, setLastStartupBackup] = useState(() =>
-    localStorage.getItem('lastStartupBackup') || ''
-  );
-
+  // ── Optional daily auto-backup (only if user enabled it) ─────
   useEffect(() => {
-    // Skip if already backed up today
+    const enabled = localStorage.getItem('dailyAutoBackup') === 'true';
+    if (!enabled) return;
     const today = new Date().toISOString().slice(0, 10);
-    if (lastStartupBackup === today) return;
+    const lastRun = localStorage.getItem('lastStartupBackup');
+    if (lastRun === today) return;
 
     invoke('auto_backup', { maxBackups: 30 })
       .then((filename) => {
-        console.log('[startup-backup] created:', filename);
+        console.log('[daily-backup] created:', filename);
         localStorage.setItem('lastStartupBackup', today);
-        setLastStartupBackup(today);
       })
-      .catch((err) =>
-        console.warn('[startup-backup] skipped:', err)
-      );
-  }, [lastStartupBackup]);
+      .catch((err) => console.warn('[daily-backup] skipped:', err));
+  }, []);
 
   // Missing months notification
   const [missingMonthsAlert, setMissingMonthsAlert] = useState([]);
@@ -206,13 +230,14 @@ export const GlobalAppProvider = ({ children }) => {
     isTourOpen,
     setIsTourOpen,
     missingMonthsAlert,
-    dismissMissingMonths
+    dismissMissingMonths,
+    reloadLocks
   }), [
     theme, workspaceMode, isMasterUnlocked, manualLockedMonths,
     lockedLevel, hierarchyNames, activeHierarchy,
     isIsolationExceptionActive, isTourOpen,
     missingMonthsAlert, dismissMissingMonths, checkIsMonthLocked,
-    toggleTheme, updateActiveHierarchy, setHierarchyNames
+    toggleTheme, updateActiveHierarchy, setHierarchyNames, reloadLocks
   ]);
 
   return (

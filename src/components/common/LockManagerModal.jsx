@@ -5,10 +5,12 @@ import { Lock, Unlock, Loader2, AlertCircle, Calendar, CheckCircle2 } from 'luci
 import invoke from '../../api/tauriApi';
 import { useToast } from '../ui/Toast';
 import { useGlobalApp } from '../../context/useGlobalApp';
+import { useAuth } from '../../context/AuthContext';
 import { isMonthLocked } from '../../utils/dateUtils';
 
 const LockManagerModal = ({ isOpen, onClose }) => {
   const toast = useToast();
+  const { user } = useAuth();
   const { manualLockedMonths, setManualLockedMonths, isMasterUnlocked } = useGlobalApp();
   const [months, setMonths] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -34,11 +36,17 @@ const LockManagerModal = ({ isOpen, onClose }) => {
   };
 
   const handleToggle = async (month, currentLocked) => {
-    // If unlocking, ask for password (unless master is already unlocked)
-    if (currentLocked && !isMasterUnlocked) {
-      const pass = window.prompt('يرجى إدخال كلمة سر المدير لفتح قفل هذا الشهر:');
-      if (pass !== 'admin123') {
-        if (pass !== null) toast.error('كلمة السر غير صحيحة!');
+    // Both locking and unlocking require password (unless master is already unlocked)
+    if (!isMasterUnlocked) {
+      const promptMsg = currentLocked
+        ? 'يرجى إدخال كلمة سر المدير لفتح قفل هذا الشهر:'
+        : 'يرجى إدخال كلمة سر المدير لقفل هذا الشهر:';
+      const pass = window.prompt(promptMsg);
+      if (pass === null) return;
+      try {
+        await invoke('verify_admin_password', { password: pass, userId: user?.id, username: user?.username });
+      } catch (err) {
+        toast.error(`❌ ${err}`);
         return;
       }
     }

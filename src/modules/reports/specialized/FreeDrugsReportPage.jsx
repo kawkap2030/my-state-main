@@ -18,11 +18,12 @@ import {
 } from 'recharts';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import PrintableTable from '../../../components/common/PrintableTable';
+import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import { toPng } from 'html-to-image';
 
 const FreeDrugsReportPage = () => {
   const toast = useToast();
-  const { activeHierarchy } = useGlobalApp();
+  const { activeHierarchy, workspaceMode, hierarchyNames } = useGlobalApp();
   const [loading, setLoading] = useState(false);
   const [viewType, setViewType] = useState('analytical'); // 'analytical' or 'administrative'
   const [data, setData] = useState([]);
@@ -216,7 +217,7 @@ const FreeDrugsReportPage = () => {
   const handlePremiumExport = async (type, { options }) => {
     try {
       let chartImage = null;
-      if (chartRef.current) chartImage = await toPng(chartRef.current, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+      if (chartRef.current) chartImage = await toPng(chartRef.current, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
       const enrichedOptions = { ...options, chartImage };
       
       const cols = viewType === 'analytical' 
@@ -248,14 +249,28 @@ const FreeDrugsReportPage = () => {
         toast.success('تم تصدير Excel بنجاح');
         return true;
       }
-      if (type === 'word') { await exportToWord(tableData, cols, enrichedOptions); toast.success('تم تصدير Word بنجاح'); return true; }
-      if (type === 'pdf') { await exportToPDF(tableData, cols, enrichedOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
+      // Word/PDF: summary table + detail table (like the premium Excel export)
+      const summaryTable = {
+        data: [
+          { indicator: 'إجمالي المجاني', val: `${stats.total.toLocaleString()} ج.م` },
+          { indicator: 'عدد الجهات', val: stats.entitiesCount },
+        ],
+        columns: [
+          { header: 'المؤشر', accessor: 'indicator' },
+          { header: 'القيمة', accessor: 'val' },
+        ],
+        title: 'ملخص التقرير',
+      };
+      const multiTables = [summaryTable, { data: tableData, columns: cols, title: 'تفاصيل الأدوية المجانية' }];
+      const wordPdfOptions = { ...enrichedOptions, tables: multiTables };
+      if (type === 'word') { await exportToWord(tableData, cols, wordPdfOptions); toast.success('تم تصدير Word بنجاح'); return true; }
+      if (type === 'pdf') { await exportToPDF(tableData, cols, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
       return false;
     } catch (err) { console.error(err); return false; }
   };
 
   return (
-    <PrintableTable title="تقرير الأدوية المجانية" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="تقرير الأدوية المجانية" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
       <div className="space-y-6 animate-fadeIn pb-20">
       <Breadcrumb items={[{ label: 'التقارير' }, { label: 'تقرير الأدوية المجانية' }]} />
       
@@ -278,7 +293,7 @@ const FreeDrugsReportPage = () => {
       <Card className="p-6 no-print space-y-4">
         <div className="w-full">
           <HierarchySelector 
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}

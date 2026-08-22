@@ -18,6 +18,9 @@ import { AlertTriangle, X } from 'lucide-react';
  * @param {string} detail - Optional secondary detail text
  * @param {string} confirmText - Confirm button text (default: 'حذف')
  * @param {string} cancelText - Cancel button text (default: 'إلغاء')
+ * @param {Function} onSkip - Optional third action (e.g. 'تجاوز وحفظ الباقي');
+ *                             rendered as a neutral button between cancel and confirm.
+ * @param {string} skipText - Label for the skip action (default: 'تجاوز')
  * @param {string} variant - 'danger' | 'warning' (default: 'danger')
  * @param {boolean} loading - Whether confirm action is in progress
  */
@@ -25,11 +28,13 @@ const ConfirmModal = ({
   isOpen, 
   onConfirm, 
   onCancel, 
+  onSkip,
   title = 'تأكيد الحذف',
   message = 'هل أنت متأكد من حذف هذا السجل؟',
   detail = '',
   confirmText = 'حذف',
   cancelText = 'إلغاء',
+  skipText = 'تجاوز',
   variant = 'danger',
   loading = false
 }) => {
@@ -102,6 +107,15 @@ const ConfirmModal = ({
           >
             {cancelText}
           </button>
+          {onSkip && (
+            <button
+              onClick={onSkip}
+              disabled={loading}
+              className="px-6 py-2.5 rounded-xl text-sm font-bold border border-[var(--color-primary)]/40 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-all disabled:opacity-50"
+            >
+              {skipText}
+            </button>
+          )}
           <button
             onClick={onConfirm}
             disabled={loading}

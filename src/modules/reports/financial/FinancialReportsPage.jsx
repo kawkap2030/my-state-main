@@ -9,6 +9,8 @@ import PrintableTable from '../../../components/common/PrintableTable';
 import ExportMenu from '../../../components/ui/ExportMenu';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
+import { useGlobalApp } from '../../../context/useGlobalApp';
+import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import { 
   TrendingUp, Calculator, 
   DollarSign, Wallet, CreditCard, ShieldCheck, Search
@@ -16,6 +18,7 @@ import {
 
 const FinancialReportsPage = () => {
   const toast = useToast();
+  const { workspaceMode, hierarchyNames } = useGlobalApp();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
   const [hierarchy, setHierarchy] = useState({ branchId: '', areaId: '', clinicId: '', dispenseMonth: new Date().toISOString().substring(0, 7) });
@@ -114,14 +117,14 @@ const FinancialReportsPage = () => {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-1 p-6 space-y-4 shadow-sm border-none no-print">
           <h3 className="font-bold text-[var(--color-text)] border-b border-[var(--color-border)] pb-3 mb-4 flex items-center gap-2">
             <Calculator size={18} className="text-cyan-600" /> معايير التقرير المالي
           </h3>
           <HierarchySelector 
             compact
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}
@@ -138,7 +141,7 @@ const FinancialReportsPage = () => {
           </div>
         </Card>
 
-        <Card className="lg:col-span-3 p-0 overflow-hidden shadow-2xl border-none ring-1 ring-slate-100 print:shadow-none print:ring-0">
+        <Card className="lg:col-span-2 p-0 overflow-hidden shadow-2xl border-none ring-1 ring-slate-100 print:shadow-none print:ring-0">
           <div className="bg-[var(--color-bg-card)] p-5 border-b border-[var(--color-border)] flex items-center justify-between print:hidden">
             <h3 className="font-black text-[var(--color-text)] flex items-center gap-2">
               <DollarSign size={20} className="text-emerald-600" /> 
@@ -181,7 +184,7 @@ const FinancialReportsPage = () => {
           </div>
 
           <div className="hidden print:block">
-             <PrintableTable title="الرقابة والتقارير المالية" subtitle="تحليل التدفقات المالية">
+             <PrintableTable title="الرقابة والتقارير المالية" subtitle="تحليل التدفقات المالية" hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
                 <Table 
                    columns={[
                      { 

@@ -2,7 +2,11 @@ use crate::db::AppState;
 use tauri::State;
 use serde::{Deserialize, Serialize};
 use calamine::{Reader, open_workbook_auto, Data};
+use rusqlite::OptionalExtension;
 use std::path::PathBuf;
+use crate::commands::month_isolation::{
+    enforce_isolation_lock, validate_non_negative_f64,
+};
 
 // ─── Data Structures ──────────────────────────────────────────────────────────
 
@@ -201,7 +205,7 @@ pub async fn import_monthly_drugs_from_excel(
         warnings: vec![],
     };
 
-    let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
+    let mut conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
     // Validate IDs exist
@@ -213,6 +217,46 @@ pub async fn import_monthly_drugs_from_excel(
     }
 
     let data_rows = &all_rows[(header_idx + 1)..];
+
+    if data_rows.is_empty() {
+        return Ok(result);
+    }
+
+    // Open a transaction: any row error rolls back the whole import
+    // (including the isolation lock created below), leaving the DB unchanged.
+    let conn_mut = conn_guard.as_mut().ok_or("Database not initialized")?;
+    let tx = conn_mut.transaction().map_err(|e| e.to_string())?;
+
+    let level = if clinic_id.is_some() { "clinic" }
+                else if area_id.is_some() { "area" }
+                else { "branch" };
+    enforce_isolation_lock(&tx, branch_id, &dispense_month, level, true)?;
+
+    // Coexistence guard: totals must not mix branch level with area/clinic level
+    // for the same branch + month.
+    if level == "branch" {
+        let exists_lower: i32 = tx.query_row(
+            "SELECT COUNT(*) FROM monthly_drugs_dispensed 
+             WHERE branch_id = ?1 AND dispense_month = ?2 
+             AND (area_id IS NOT NULL OR clinic_id IS NOT NULL)",
+            rusqlite::params![branch_id, dispense_month],
+            |r| r.get(0)
+        ).unwrap_or(0);
+        if exists_lower > 0 {
+            return Err("عذراً، توجد سجلات تفصيلية (مناطق أو عيادات) لهذا الفرع والشهر. لا يمكن استيراد إجمالي على مستوى الفرع منعاً لتضارب البيانات.".to_string());
+        }
+    } else {
+        let exists_branch: i32 = tx.query_row(
+            "SELECT COUNT(*) FROM monthly_drugs_dispensed 
+             WHERE branch_id = ?1 AND dispense_month = ?2 
+             AND area_id IS NULL AND clinic_id IS NULL",
+            rusqlite::params![branch_id, dispense_month],
+            |r| r.get(0)
+        ).unwrap_or(0);
+        if exists_branch > 0 {
+            return Err("عذراً، توجد بيانات مجمعة على مستوى الفرع لهذا الشهر. لا يمكن استيراد سجلات مناطق أو عيادات منعاً للتكرار.".to_string());
+        }
+    }
 
     for (row_num, row) in data_rows.iter().enumerate() {
         let display_row = row_num + header_idx + 2; // 1-indexed for display
@@ -241,16 +285,34 @@ pub async fn import_monthly_drugs_from_excel(
         let supp_inf_val = get_val("drugs_supported_infants_value");
         let supp_inf_share = get_val("drugs_supported_infants_patient_share");
 
+        // Negative value validation — any negative value cancels the import.
+        for (label, value) in [
+            ("منصرف الهيئة", free_authority),
+            ("منصرف الطلاب", free_students),
+            ("منصرف الرضع", free_infants),
+            ("منصرف المرأة المعيلة", free_breadwinner),
+            ("قيمة الهيئة المدعمة", supp_auth_val),
+            ("حصة المريض - هيئة", supp_auth_share),
+            ("قيمة الطلبة المدعمة", supp_std_val),
+            ("حصة المريض - طلبة", supp_std_share),
+            ("قيمة الرضع المدعمة", supp_inf_val),
+            ("حصة المريض - رضع", supp_inf_share),
+        ] {
+            if let Err(e) = validate_non_negative_f64(label, value) {
+                return Err(format!("الصف {}: {} - تم إلغاء الاستيراد", display_row, e));
+            }
+        }
+
         // Check if record already exists
-        let existing: i32 = conn.query_row(
+        let existing: i32 = tx.query_row(
             "SELECT COUNT(*) FROM monthly_drugs_dispensed WHERE branch_id=?1 AND area_id IS ?2 AND clinic_id IS ?3 AND dispense_month=?4",
             rusqlite::params![branch_id, area_id, clinic_id, dispense_month],
             |r| r.get(0)
         ).unwrap_or(0);
 
         if existing > 0 {
-            // Update
-            let update_result = conn.execute(
+            // Re-import over the same hierarchy: update in place and report it.
+            tx.execute(
                 "UPDATE monthly_drugs_dispensed SET 
                     drugs_free_authority=?1, drugs_free_students=?2, drugs_free_infants=?3,
                     drugs_free_breadwinner_women=?4,
@@ -265,20 +327,12 @@ pub async fn import_monthly_drugs_from_excel(
                     supp_inf_val, supp_inf_share,
                     branch_id, area_id, clinic_id, dispense_month
                 ]
-            );
-            match update_result {
-                Ok(_) => {
-                    result.success_count += 1;
-                    result.warnings.push(format!("الصف {}: تم تحديث سجل موجود", display_row));
-                }
-                Err(e) => {
-                    result.error_count += 1;
-                    result.errors.push(format!("الصف {}: فشل التحديث - {}", display_row, e));
-                }
-            }
+            ).map_err(|e| format!("الصف {}: فشل التحديث - {}", display_row, e))?;
+            result.success_count += 1;
+            result.warnings.push(format!("الصف {}: تم تحديث سجل موجود", display_row));
         } else {
             // Insert
-            let insert_result = conn.execute(
+            tx.execute(
                 "INSERT INTO monthly_drugs_dispensed (
                     branch_id, area_id, clinic_id, dispense_month,
                     drugs_free_authority, drugs_free_students, drugs_free_infants,
@@ -294,16 +348,12 @@ pub async fn import_monthly_drugs_from_excel(
                     supp_std_val, supp_std_share,
                     supp_inf_val, supp_inf_share
                 ]
-            );
-            match insert_result {
-                Ok(_) => result.success_count += 1,
-                Err(e) => {
-                    result.error_count += 1;
-                    result.errors.push(format!("الصف {}: {}", display_row, e));
-                }
-            }
+            ).map_err(|e| format!("الصف {}: {}", display_row, e))?;
+            result.success_count += 1;
         }
     }
+
+    tx.commit().map_err(|e| e.to_string())?;
 
     Ok(result)
 }
@@ -364,10 +414,23 @@ pub async fn import_detailed_drugs_from_excel(
         warnings: vec![],
     };
 
-    let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
-    let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+    let mut conn_guard = state.db.lock().map_err(|e| e.to_string())?;
 
     let data_rows = &all_rows[(header_idx + 1)..];
+
+    if data_rows.is_empty() {
+        return Ok(result);
+    }
+
+    // Open a transaction: any row error rolls back the whole import
+    // (including the isolation lock created below), leaving the DB unchanged.
+    let conn_mut = conn_guard.as_mut().ok_or("Database not initialized")?;
+    let tx = conn_mut.transaction().map_err(|e| e.to_string())?;
+
+    let level = if clinic_id.is_some() { "clinic" }
+                else if area_id.is_some() { "area" }
+                else { "branch" };
+    enforce_isolation_lock(&tx, branch_id, &dispense_month, level, true)?;
 
     for (row_num, row) in data_rows.iter().enumerate() {
         let display_row = row_num + header_idx + 2;
@@ -384,24 +447,33 @@ pub async fn import_detailed_drugs_from_excel(
             .unwrap_or_default();
 
         if drug_name.is_empty() {
-            result.error_count += 1;
-            result.errors.push(format!("الصف {}: اسم الدواء فارغ", display_row));
-            continue;
+            return Err(format!("الصف {}: اسم الدواء فارغ - تم إلغاء الاستيراد", display_row));
         }
 
-        // Lookup drug by name
-        let drug_id: Option<i32> = conn.query_row(
-            "SELECT id FROM drugs WHERE name = ?1 OR name LIKE ?2",
-            rusqlite::params![drug_name, format!("%{}%", drug_name)],
+        // Deterministic drug lookup: exact match first. A LIKE fallback is only
+        // used when it resolves to exactly one drug — anything else cancels the
+        // import rather than guessing.
+        let drug_id: Option<i32> = tx.query_row(
+            "SELECT id FROM drugs WHERE name = ?1",
+            rusqlite::params![drug_name],
             |r| r.get(0)
-        ).ok();
+        ).optional().map_err(|e| e.to_string())?;
 
         let drug_id = match drug_id {
             Some(id) => id,
             None => {
-                result.error_count += 1;
-                result.errors.push(format!("الصف {}: الدواء '{}' غير موجود في قاعدة البيانات", display_row, drug_name));
-                continue;
+                let mut stmt = tx.prepare("SELECT id FROM drugs WHERE name LIKE ?1")
+                    .map_err(|e| e.to_string())?;
+                let matches = stmt
+                    .query_map(rusqlite::params![format!("%{}%", drug_name)], |r| r.get(0))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<i32>, _>>()
+                    .map_err(|e| e.to_string())?;
+                match matches.as_slice() {
+                    [single] => *single,
+                    [] => return Err(format!("الصف {}: الدواء '{}' غير موجود في قاعدة البيانات - تم إلغاء الاستيراد", display_row, drug_name)),
+                    _ => return Err(format!("الصف {}: اسم الدواء '{}' غير محدد (يوجد أكثر من نتيجة مطابقة) - تم إلغاء الاستيراد", display_row, drug_name)),
+                }
             }
         };
 
@@ -417,44 +489,44 @@ pub async fn import_detailed_drugs_from_excel(
             .and_then(|idx| row.get(idx))
             .map(cell_to_f64)
             .unwrap_or(0.0);
+
+        // Zero/negative value validation — any invalid row cancels the whole
+        // import (existing transactional rollback behaviour is preserved).
+        if quantity < 0.0 {
+            return Err(format!("الصف {}: الكمية سالبة - تم إلغاء الاستيراد", display_row));
+        }
+        if unit_price <= 0.0 {
+            return Err(format!("الصف {}: سعر الوحدة يجب أن يكون أكبر من صفر - تم إلغاء الاستيراد", display_row));
+        }
+        if cases_count <= 0 {
+            return Err(format!("الصف {}: عدد الحالات يجب أن يكون أكبر من صفر - تم إلغاء الاستيراد", display_row));
+        }
+
         let total_cost = quantity * unit_price;
 
-        // Check if record exists (same drug + month + hierarchy)
-        let existing: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM detailed_drug_dispensed WHERE drug_id=?1 AND branch_id=?2 AND area_id IS ?3 AND clinic_id IS ?4 AND dispense_month=?5",
-            rusqlite::params![drug_id, branch_id, area_id, clinic_id, dispense_month],
+        // Price-in-identity duplicate check: a record with the SAME drug +
+        // location + month + price is a duplicate (reject). A different price is
+        // a distinct legitimate record (insert), never a silent overwrite.
+        let same_price_exists: i32 = tx.query_row(
+            "SELECT COUNT(*) FROM detailed_drug_dispensed 
+             WHERE drug_id=?1 AND branch_id=?2 AND area_id IS ?3 AND clinic_id IS ?4 
+               AND dispense_month=?5 AND ABS(unit_price - ?6) < 0.0001",
+            rusqlite::params![drug_id, branch_id, area_id, clinic_id, dispense_month, unit_price],
             |r| r.get(0)
         ).unwrap_or(0);
-
-        if existing > 0 {
-            let upd = conn.execute(
-                "UPDATE detailed_drug_dispensed SET quantity=?1, cases_count=?2, unit_price=?3, total_cost=?4 WHERE drug_id=?5 AND branch_id=?6 AND area_id IS ?7 AND clinic_id IS ?8 AND dispense_month=?9",
-                rusqlite::params![quantity, cases_count, unit_price, total_cost, drug_id, branch_id, area_id, clinic_id, dispense_month]
-            );
-            match upd {
-                Ok(_) => {
-                    result.success_count += 1;
-                    result.warnings.push(format!("الصف {}: تم تحديث '{}' (سجل موجود)", display_row, drug_name));
-                }
-                Err(e) => {
-                    result.error_count += 1;
-                    result.errors.push(format!("الصف {}: فشل التحديث '{}' - {}", display_row, drug_name, e));
-                }
-            }
-        } else {
-            let ins = conn.execute(
-                "INSERT INTO detailed_drug_dispensed (branch_id, area_id, clinic_id, dispense_month, drug_id, quantity, cases_count, unit_price, total_cost) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                rusqlite::params![branch_id, area_id, clinic_id, dispense_month, drug_id, quantity, cases_count, unit_price, total_cost]
-            );
-            match ins {
-                Ok(_) => result.success_count += 1,
-                Err(e) => {
-                    result.error_count += 1;
-                    result.errors.push(format!("الصف {}: '{}'- {}", display_row, drug_name, e));
-                }
-            }
+        if same_price_exists > 0 {
+            return Err(format!("الصف {}: يوجد ادخال سابق للصنف '{}' بنفس السعر ({}) لهذا الشهر - تم إلغاء الاستيراد", display_row, drug_name, unit_price));
         }
+
+        tx.execute(
+            "INSERT INTO detailed_drug_dispensed (branch_id, area_id, clinic_id, dispense_month, drug_id, quantity, cases_count, unit_price, total_cost) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            rusqlite::params![branch_id, area_id, clinic_id, dispense_month, drug_id, quantity, cases_count, unit_price, total_cost]
+        ).map_err(|e| format!("الصف {}: '{}' - {}", display_row, drug_name, e))?;
+
+        result.success_count += 1;
     }
+
+    tx.commit().map_err(|e| e.to_string())?;
 
     Ok(result)
 }

@@ -20,12 +20,13 @@ import Card from "../../../components/ui/Card";
 import MonthlyHistoryTable from "../../../components/common/MonthlyHistoryTable";
 import { useGlobalApp } from "../../../context/useGlobalApp";
 import { ToggleLeft, ToggleRight } from "lucide-react";
+import { buildHierarchyLabel } from "../../../utils/reportUtils";
 
 import PrintableTable from '../../../components/common/PrintableTable';
 
 const FreeDrugsTotalsPage = () => {
   const location = useLocation();
-  const { activeHierarchy, isIsolationExceptionActive, setIsIsolationExceptionActive, lockedLevel, setWorkspaceMode } = useGlobalApp();
+  const { activeHierarchy, workspaceMode, hierarchyNames, isIsolationExceptionActive, setIsIsolationExceptionActive, lockedLevel, setWorkspaceMode } = useGlobalApp();
   
   // Cleanup exception on unmount
   React.useEffect(() => {
@@ -74,7 +75,7 @@ const FreeDrugsTotalsPage = () => {
   };
 
   return (
-    <PrintableTable title="صرف الأدوية الشهري (مجاني)" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="صرف الأدوية الشهري (مجاني)" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
     <div className="space-y-6 animate-fadeIn pb-20">
       <div className="no-print space-y-6">
         {/* Premium Header Banner */}
@@ -93,7 +94,7 @@ const FreeDrugsTotalsPage = () => {
           </div>
           <div className="flex items-center gap-3">
             <Link
-              to="/"
+              to="/reports/specialized/free-drugs"
               className="flex items-center gap-2 px-5 py-2.5 bg-white text-[var(--color-primary)] rounded-xl font-black text-sm hover:bg-cyan-50 transition-all shadow-lg"
             >
               <BarChart3 size={18} /> التقارير
@@ -102,9 +103,11 @@ const FreeDrugsTotalsPage = () => {
         </div>
 
         {/* ═══════ Add New Record Section ═══════ */}
-        <Card className="p-0 overflow-hidden border-none shadow-xl">
+        {/* NOTE: no overflow-hidden on the card — it would clip the AutoComplete
+            dropdowns inside HierarchySelector (the list gets cut off mid-scroll). */}
+        <Card className="p-0 border-none shadow-xl">
           {/* Section Header */}
-          <div className="bg-[var(--color-primary)] text-white p-4 flex items-center gap-3">
+          <div className="bg-[var(--color-primary)] text-white p-4 flex items-center gap-3 rounded-t-[20px]">
             <Gift size={20} />
             <h3 className="text-base font-black">إضافة سجل صرف أدوية جديد</h3>
           </div>
@@ -148,7 +151,7 @@ const FreeDrugsTotalsPage = () => {
             {/* Hierarchy Selectors - Vertical Stack */}
             <HierarchySelector
               onSelectionChange={(data) =>
-                setHierarchy({ ...hierarchy, ...data })
+                setHierarchy(prev => ({ ...prev, ...data }))
               }
               initialBranch={hierarchy.branchId}
               initialArea={hierarchy.areaId}

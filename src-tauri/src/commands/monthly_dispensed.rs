@@ -1,7 +1,11 @@
 use crate::db::AppState;
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use crate::commands::month_isolation::enforce_isolation_lock;
+use rusqlite::OptionalExtension;
+use crate::commands::month_isolation::{
+    enforce_isolation_lock, enforce_isolation_lock_guard, cleanup_isolation_lock_if_empty,
+    validate_non_negative_f64, validate_strictly_positive_f64, validate_strictly_positive_i32,
+};
 use crate::commands::audit::log_action;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -32,12 +36,55 @@ pub fn save_monthly_drugs_dispensed(
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    // --- Negative value validation ---
+    for (label, value) in [
+        ("منصرف الهيئة", data.drugs_free_authority),
+        ("منصرف الطلاب", data.drugs_free_students),
+        ("منصرف الرضع", data.drugs_free_infants),
+        ("منصرف المرأة المعيلة", data.drugs_free_breadwinner_women),
+        ("قيمة الهيئة المدعمة", data.drugs_supported_authority_value),
+        ("حصة المريض - هيئة", data.drugs_supported_authority_patient_share),
+        ("قيمة الطلبة المدعمة", data.drugs_supported_students_value),
+        ("حصة المريض - طلبة", data.drugs_supported_students_patient_share),
+        ("قيمة الرضع المدعمة", data.drugs_supported_infants_value),
+        ("حصة المريض - رضع", data.drugs_supported_infants_patient_share),
+    ] {
+        validate_non_negative_f64(label, value)?;
+    }
+
     // --- Global Month Isolation Lock ---
     let level = if data.clinic_id.is_some() { "clinic" } 
                 else if data.area_id.is_some() { "area" } 
                 else { "branch" };
     
     enforce_isolation_lock(conn, data.branch_id, &data.dispense_month, level, true)?;
+
+    // --- Coexistence guard (prevents branch-level totals coexisting with
+    //     area/clinic-level rows which would double-count aggregations) ---
+    let exclude_id = data.id.unwrap_or(-1);
+    if level == "branch" {
+        let exists_lower: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM monthly_drugs_dispensed 
+             WHERE branch_id = ?1 AND dispense_month = ?2 AND id != ?3 
+             AND (area_id IS NOT NULL OR clinic_id IS NOT NULL)",
+            rusqlite::params![data.branch_id, data.dispense_month, exclude_id],
+            |r| r.get(0)
+        ).unwrap_or(0);
+        if exists_lower > 0 {
+            return Err("عذراً، توجد سجلات تفصيلية (مناطق أو عيادات) لهذا الفرع والشهر. لا يمكن إدخال إجمالي على مستوى الفرع منعاً لتضارب البيانات.".to_string());
+        }
+    } else {
+        let exists_branch: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM monthly_drugs_dispensed 
+             WHERE branch_id = ?1 AND dispense_month = ?2 AND id != ?3 
+             AND area_id IS NULL AND clinic_id IS NULL",
+            rusqlite::params![data.branch_id, data.dispense_month, exclude_id],
+            |r| r.get(0)
+        ).unwrap_or(0);
+        if exists_branch > 0 {
+            return Err("عذراً، توجد بيانات مجمعة على مستوى الفرع لهذا الشهر. لا يمكن إدخال سجلات مناطق أو عيادات لهذا الفرع منعاً للتكرار.".to_string());
+        }
+    }
 
     if let Some(id) = data.id {
         // Update
@@ -261,6 +308,12 @@ pub fn save_detailed_drug_dispensed(
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    // --- 0. Negative value validation ---
+    validate_non_negative_f64("الكمية", quantity)?;
+    validate_strictly_positive_i32("عدد الحالات", casesCount)?;
+    validate_strictly_positive_f64("سعر الوحدة", unitPrice)?;
+    validate_non_negative_f64("إجمالي التكلفة", totalCost)?;
+
     // --- 0. Global Month Isolation Lock ---
     let current_level = if clinicId.is_some() { "clinic" } 
                         else if areaId.is_some() { "area" } 
@@ -367,6 +420,43 @@ pub fn update_detailed_drug_dispensed(
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    // --- Negative value validation ---
+    validate_non_negative_f64("الكمية", quantity)?;
+    validate_strictly_positive_i32("عدد الحالات", casesCount)?;
+    validate_strictly_positive_f64("سعر الوحدة", unitPrice)?;
+    validate_non_negative_f64("إجمالي التكلفة", totalCost)?;
+
+    // --- Fetch the record to derive its level & identity for lock + duplicates ---
+    let rec: Option<(i32, Option<i32>, Option<i32>, i32, String, f64)> = conn.query_row(
+        "SELECT branch_id, area_id, clinic_id, drug_id, dispense_month, unit_price 
+         FROM detailed_drug_dispensed WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+    ).optional().map_err(|e| e.to_string())?;
+
+    let (branch_id, area_id, clinic_id, drug_id, dispense_month, _old_price) = match rec {
+        Some(r) => r,
+        None => return Err("السجل غير موجود".to_string()),
+    };
+
+    let current_level = if clinic_id.is_some() { "clinic" }
+                        else if area_id.is_some() { "area" }
+                        else { "branch" };
+    enforce_isolation_lock_guard(conn, branch_id, &dispense_month, current_level)?;
+
+    // --- Duplicate check (same drug + location + month + price), excluding this record ---
+    let dup: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM detailed_drug_dispensed 
+         WHERE branch_id = ?1 AND drug_id = ?2 AND dispense_month = ?3
+           AND (area_id IS ?4) AND (clinic_id IS ?5) AND id != ?6
+           AND ABS(unit_price - ?7) < 0.0001",
+        rusqlite::params![branch_id, drug_id, dispense_month, area_id, clinic_id, id, unitPrice],
+        |r| r.get(0)
+    ).unwrap_or(0);
+    if dup > 0 {
+        return Err("يوجد ادخال سابق للصنف بنفس السعر يمكنك مراجعة الصنف والتعديل عليه".to_string());
+    }
+
     conn.execute(
         "UPDATE detailed_drug_dispensed 
          SET quantity = ?1, cases_count = ?2, unit_price = ?3, total_cost = ?4 
@@ -392,10 +482,29 @@ pub fn delete_detailed_drug_dispensed(
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    let rec: Option<(i32, Option<i32>, Option<i32>, String)> = conn.query_row(
+        "SELECT branch_id, area_id, clinic_id, dispense_month 
+         FROM detailed_drug_dispensed WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional().map_err(|e| e.to_string())?;
+
+    let (branch_id, area_id, clinic_id, dispense_month) = match rec {
+        Some(r) => r,
+        None => return Err("السجل غير موجود".to_string()),
+    };
+
+    let current_level = if clinic_id.is_some() { "clinic" }
+                        else if area_id.is_some() { "area" }
+                        else { "branch" };
+    enforce_isolation_lock_guard(conn, branch_id, &dispense_month, current_level)?;
+
     conn.execute(
         "DELETE FROM detailed_drug_dispensed WHERE id = ?1",
         rusqlite::params![id],
     ).map_err(|e| e.to_string())?;
+
+    cleanup_isolation_lock_if_empty(conn, branch_id, &dispense_month)?;
     
     // Audit log
     let _ = log_action(
@@ -662,6 +771,24 @@ pub fn save_detailed_supply_dispensed(
 
     if supplyId.is_none() && categoryId.is_none() {
         return Err("يجب اختيار مستلزم أو تصنيف".to_string());
+    }
+
+    // --- Negative value validation ---
+    validate_non_negative_f64("قيمة المستهلكين", consumerValue)?;
+    validate_non_negative_f64("قيمة الجهات الجماعية", collectiveEntitiesValue)?;
+
+    // --- Duplicate protection (same supply/category + location + month) ---
+    let exclude_id = id.unwrap_or(-1);
+    let dup: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM monthly_supplies_dispensed 
+         WHERE branch_id = ?1 AND dispense_month = ?2 AND id != ?3
+           AND (supply_id IS ?4) AND (category_id IS ?5)
+           AND (area_id IS ?6) AND (clinic_id IS ?7)",
+        rusqlite::params![branchId, dispenseMonth, exclude_id, supplyId, categoryId, areaId, clinicId],
+        |r| r.get(0)
+    ).unwrap_or(0);
+    if dup > 0 {
+        return Err("هذا المستلزم/التصنيف مسجل بالفعل لهذه الجهة والشهر. يمكنك مراجعة السجل والتعديل عليه.".to_string());
     }
 
     // --- Global Month Isolation Lock ---
@@ -941,10 +1068,29 @@ pub fn delete_monthly_drugs_dispensed(
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    let rec: Option<(i32, Option<i32>, Option<i32>, String)> = conn.query_row(
+        "SELECT branch_id, area_id, clinic_id, dispense_month 
+         FROM monthly_drugs_dispensed WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional().map_err(|e| e.to_string())?;
+
+    let (branch_id, area_id, clinic_id, dispense_month) = match rec {
+        Some(r) => r,
+        None => return Err("السجل غير موجود".to_string()),
+    };
+
+    let current_level = if clinic_id.is_some() { "clinic" }
+                        else if area_id.is_some() { "area" }
+                        else { "branch" };
+    enforce_isolation_lock_guard(conn, branch_id, &dispense_month, current_level)?;
+
     conn.execute(
         "DELETE FROM monthly_drugs_dispensed WHERE id = ?1",
         rusqlite::params![id],
     ).map_err(|e| e.to_string())?;
+
+    cleanup_isolation_lock_if_empty(conn, branch_id, &dispense_month)?;
     
     // Audit log
     let _ = log_action(
@@ -964,10 +1110,29 @@ pub fn delete_monthly_supplies_dispensed(
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    let rec: Option<(i32, Option<i32>, Option<i32>, String)> = conn.query_row(
+        "SELECT branch_id, area_id, clinic_id, dispense_month 
+         FROM monthly_supplies_dispensed WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional().map_err(|e| e.to_string())?;
+
+    let (branch_id, area_id, clinic_id, dispense_month) = match rec {
+        Some(r) => r,
+        None => return Err("السجل غير موجود".to_string()),
+    };
+
+    let current_level = if clinic_id.is_some() { "clinic" }
+                        else if area_id.is_some() { "area" }
+                        else { "branch" };
+    enforce_isolation_lock_guard(conn, branch_id, &dispense_month, current_level)?;
+
     conn.execute(
         "DELETE FROM monthly_supplies_dispensed WHERE id = ?1",
         rusqlite::params![id],
     ).map_err(|e| e.to_string())?;
+
+    cleanup_isolation_lock_if_empty(conn, branch_id, &dispense_month)?;
     
     // Audit log
     let _ = log_action(

@@ -10,7 +10,7 @@ const BranchBatchSummaryPage = () => {
   const [dispenseMonth, setDispenseMonth] = useState(currentMonth);
 
   return (
-    <PrintableTable title="ملخص الفروع (دفعة واحدة)" subtitle={dispenseMonth ? `شهر ${dispenseMonth}` : ''}>
+    <PrintableTable title="ملخص الفروع (دفعة واحدة)" subtitle={dispenseMonth ? `شهر ${dispenseMonth}` : ''} hierarchyLabel="جميع الفروع">
     <div className="space-y-6 animate-fadeIn">
       <Breadcrumb
         items={[
@@ -33,7 +33,7 @@ const BranchBatchSummaryPage = () => {
             type="month"
             value={dispenseMonth}
             onChange={e => setDispenseMonth(e.target.value)}
-            className="px-3 py-2 border border-[var(--color-border)] rounded-lg bg-[var(--color-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] font-bold"
+            className="px-3 py-2 border border-[var(--color-border)] rounded-lg bg-[var(--color-bg)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] font-bold"
           />
         </div>
       </div>

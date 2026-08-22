@@ -20,11 +20,12 @@ import {
 } from 'recharts';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import PrintableTable from '../../../components/common/PrintableTable';
+import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import { toPng } from 'html-to-image';
 
 const JudicialReportPage = () => {
   const toast = useToast();
-  const { activeHierarchy } = useGlobalApp();
+  const { activeHierarchy, workspaceMode, hierarchyNames } = useGlobalApp();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
   const [hierarchy, setHierarchy] = useState({ 
@@ -78,7 +79,7 @@ const JudicialReportPage = () => {
       render: (row) => (
         <div className="flex flex-col">
           <span className="font-bold text-[var(--color-text)]">{row.patient_name || 'مريض رقم ' + row.patient_id}</span>
-          <span className="text-[10px] text-[var(--color-text-muted)] truncate max-w-[200px]">{row.diagnosis}</span>
+          <span className="text-[10px] text-[var(--color-text-muted)] truncate max-w-[200px]" title={row.diagnosis}>{row.diagnosis}</span>
         </div>
       )
     },
@@ -116,7 +117,7 @@ const JudicialReportPage = () => {
   const handlePremiumExport = async (type, { data, options }) => {
     try {
       let chartImage = null;
-      if (chartRef.current) chartImage = await toPng(chartRef.current, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+      if (chartRef.current) chartImage = await toPng(chartRef.current, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
       const enrichedOptions = { ...options, chartImage };
       if (type === 'excel') {
         const sheetsData = { 'تحليل الأحكام': { data: data, columns: exportColumns, options: enrichedOptions } };
@@ -132,14 +133,28 @@ const JudicialReportPage = () => {
         toast.success('تم تصدير Excel بنجاح');
         return true;
       }
-      if (type === 'word') { await exportToWord(data, exportColumns, enrichedOptions); toast.success('تم تصدير Word بنجاح'); return true; }
-      if (type === 'pdf') { await exportToPDF(data, exportColumns, enrichedOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
+      // Word/PDF: summary table + detail table (like the premium Excel export)
+      const summaryTable = {
+        data: [
+          { indicator: 'إجمالي التكلفة', val: `${stats.totalCost.toLocaleString()} ج.م` },
+          { indicator: 'عدد الحالات', val: stats.patientCount },
+        ],
+        columns: [
+          { header: 'المؤشر', accessor: 'indicator' },
+          { header: 'القيمة', accessor: 'val' },
+        ],
+        title: 'ملخص التقرير',
+      };
+      const multiTables = [summaryTable, { data, columns: exportColumns, title: 'تفاصيل الأحكام القضائية' }];
+      const wordPdfOptions = { ...enrichedOptions, tables: multiTables };
+      if (type === 'word') { await exportToWord(data, exportColumns, wordPdfOptions); toast.success('تم تصدير Word بنجاح'); return true; }
+      if (type === 'pdf') { await exportToPDF(data, exportColumns, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
       return false;
     } catch (err) { console.error(err); return false; }
   };
 
   return (
-    <PrintableTable title="تقرير الأحكام القضائية" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="تقرير الأحكام القضائية" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
       <div className="space-y-6 animate-fadeIn pb-20">
       <Breadcrumb items={[{ label: 'التقارير' }, { label: 'تقرير الأحكام القضائية' }]} />
       
@@ -154,7 +169,7 @@ const JudicialReportPage = () => {
       <Card className="p-6 no-print">
         <div className="w-full">
           <HierarchySelector 
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}

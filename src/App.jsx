@@ -191,7 +191,6 @@ function App() {
           <AuthProvider>
             <GlobalAppProvider>
               <RouterProvider router={router} />
-              <ToastRenderer />
             </GlobalAppProvider>
           </AuthProvider>
         </ToastProvider>

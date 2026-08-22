@@ -62,7 +62,7 @@ const DemographicReportPage = () => {
           if (chartRef.current) {
             const el = chartRef.current.querySelector('.recharts-wrapper');
             if (el) {
-              const img = await toPng(el, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+              const img = await toPng(el, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
               setChartImage(img);
             }
           }
@@ -229,22 +229,23 @@ const DemographicReportPage = () => {
         chartImage
       };
 
+      // Build summary sheet (shared by Excel multi-sheet and Word/PDF tables)
+      const summaryCols = [
+        { header: 'الفئة الاجتماعية', accessor: 'category' },
+        { header: 'إجمالي المجاني (ج.م)', accessor: 'free' },
+        { header: 'إجمالي المدعم (ج.م)', accessor: 'sup' },
+        { header: 'حصة المريض (ج.م)', accessor: 'share' },
+        { header: 'الإجمالي الكلي (ج.م)', accessor: 'total' }
+      ];
+      const summaryExportRows = [
+        { category: 'العاملين بالهيئة', free: summaries.authority.free.toLocaleString(), sup: summaries.authority.sup.toLocaleString(), share: summaries.authority.share.toLocaleString(), total: summaries.authority.total.toLocaleString() },
+        { category: 'الطلاب', free: summaries.students.free.toLocaleString(), sup: summaries.students.sup.toLocaleString(), share: summaries.students.share.toLocaleString(), total: summaries.students.total.toLocaleString() },
+        { category: 'الأطفال الرضع', free: summaries.infants.free.toLocaleString(), sup: summaries.infants.sup.toLocaleString(), share: summaries.infants.share.toLocaleString(), total: summaries.infants.total.toLocaleString() },
+        { category: 'المرأة المعيلة', free: summaries.women.free.toLocaleString(), sup: '--', share: '--', total: summaries.women.total.toLocaleString() },
+        { category: 'الإجمالي العام', free: summaries.totalFree.toLocaleString(), sup: summaries.totalSupported.toLocaleString(), share: summaries.totalShare.toLocaleString(), total: summaries.grandTotal.toLocaleString() }
+      ];
+
       if (type === 'excel') {
-        // Build summary sheet for premium Excel export
-        const summaryCols = [
-          { header: 'الفئة الاجتماعية', accessor: 'category' },
-          { header: 'إجمالي المجاني (ج.م)', accessor: 'free' },
-          { header: 'إجمالي المدعم (ج.م)', accessor: 'sup' },
-          { header: 'حصة المريض (ج.م)', accessor: 'share' },
-          { header: 'الإجمالي الكلي (ج.م)', accessor: 'total' }
-        ];
-        const summaryExportRows = [
-          { category: 'العاملين بالهيئة', free: summaries.authority.free.toLocaleString(), sup: summaries.authority.sup.toLocaleString(), share: summaries.authority.share.toLocaleString(), total: summaries.authority.total.toLocaleString() },
-          { category: 'الطلاب', free: summaries.students.free.toLocaleString(), sup: summaries.students.sup.toLocaleString(), share: summaries.students.share.toLocaleString(), total: summaries.students.total.toLocaleString() },
-          { category: 'الأطفال الرضع', free: summaries.infants.free.toLocaleString(), sup: summaries.infants.sup.toLocaleString(), share: summaries.infants.share.toLocaleString(), total: summaries.infants.total.toLocaleString() },
-          { category: 'المرأة المعيلة', free: summaries.women.free.toLocaleString(), sup: '--', share: '--', total: summaries.women.total.toLocaleString() },
-          { category: 'الإجمالي العام', free: summaries.totalFree.toLocaleString(), sup: summaries.totalSupported.toLocaleString(), share: summaries.totalShare.toLocaleString(), total: summaries.grandTotal.toLocaleString() }
-        ];
         const sheetsData = {
           'ملخص الفئات الاجتماعية': { data: summaryExportRows, columns: summaryCols, options: exportOptions },
           'تفاصيل البيانات الشهرية': { data: exportRows, columns: exportColumns, options: exportOptions }
@@ -256,12 +257,18 @@ const DemographicReportPage = () => {
         });
         return true;
       }
+      // Word/PDF: mirror the Excel sheets as separate titled tables
+      const multiTables = [
+        { data: summaryExportRows, columns: summaryCols, title: 'ملخص الفئات الاجتماعية' },
+        { data: exportRows, columns: exportColumns, title: 'تفاصيل البيانات الشهرية' },
+      ];
+      const wordPdfOptions = { ...exportOptions, tables: multiTables };
       if (type === 'word') {
-        exportToWord(exportRows, exportColumns, exportOptions);
+        exportToWord(summaryExportRows, summaryCols, wordPdfOptions);
         return true;
       }
       if (type === 'pdf') {
-        await exportToPDF(exportRows, exportColumns, exportOptions);
+        await exportToPDF(summaryExportRows, summaryCols, wordPdfOptions);
         return true;
       }
       return false;
@@ -301,11 +308,11 @@ const DemographicReportPage = () => {
           {/* Hierarchy */}
           <div className="lg:col-span-2">
             <HierarchySelector 
-              onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+              onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
               initialBranch={hierarchy.branchId}
               initialArea={hierarchy.areaId}
               initialClinic={hierarchy.clinicId}
-              showMonthPicker={false} // Disable single month selection
+              hideMonth // Disable single month selection (page has its own date-range picker)
             />
           </div>
           

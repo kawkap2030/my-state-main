@@ -10,11 +10,11 @@
  * Auto-hides when connected and stable.
  */
 import React, { useState, useEffect } from 'react';
-import { Wifi, WifiOff, Loader2, RefreshCw, Database, X } from 'lucide-react';
+import { Wifi, WifiOff, Loader2, RefreshCw, Database, X, AlertTriangle } from 'lucide-react';
 import useConnectionStatus from '../../hooks/useConnectionStatus';
 
 const ConnectionStatusBar = () => {
-  const { status, isOnline, latency, lastCheck, checkNow, wasDisconnected, dismissReconnect } = useConnectionStatus();
+  const { status, isOnline, latency, lastCheck, checkNow, wasDisconnected, dismissReconnect, dbError } = useConnectionStatus();
   const [visible, setVisible] = useState(true);
   const [dismissed, setDismissed] = useState(false);
 
@@ -27,6 +27,38 @@ const ConnectionStatusBar = () => {
     const t = setTimeout(() => setVisible(true), 0);
     return () => clearTimeout(t);
   }, [isOnline, status, lastCheck]);
+
+  // ── Database health warning: PERSISTENT, cannot be dismissed ─────────
+  // Shown when the backend flagged an integrity/open failure at startup.
+  // The app stays usable (read-only) but every write is refused, so the
+  // banner must remain visible until the DB is healthy again.
+  if (dbError) {
+    return (
+      <div
+        className="fixed bottom-0 right-0 left-0 z-[100]"
+        dir="rtl"
+      >
+        <div
+          className="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-red-500/50 backdrop-blur-md"
+          style={{ background: 'rgba(127, 29, 29, 0.96)' }}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <AlertTriangle size={15} className="text-red-300 shrink-0 animate-pulse" />
+            <span className="text-[11px] font-bold text-red-50 leading-relaxed">
+              {dbError}
+            </span>
+          </div>
+          <button
+            onClick={checkNow}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all cursor-pointer bg-red-500/25 hover:bg-red-500/40 text-red-100 shrink-0"
+          >
+            <RefreshCw size={12} />
+            <span>إعادة الفحص</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // If user dismissed while online, keep hidden
   if (dismissed && isOnline) return null;

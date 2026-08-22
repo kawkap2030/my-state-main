@@ -46,20 +46,18 @@ export const isAdmin = (userRole) => userRole === "admin";
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const loading = false;
   const toast = useToast();
 
   // Always start logged out so the app opens on the login page.
   // Session is only kept in memory for the current app run (not restored from storage).
   useEffect(() => {
     localStorage.removeItem("app_user");
-    const t = setTimeout(() => setLoading(false), 0);
-    return () => clearTimeout(t);
   }, []);
 
   const login = useCallback(async (username, password) => {
     try {
-      const userData = await invoke("login", { username, passwordHash: password });
+      const userData = await invoke("login", { username, password });
       setUser(userData);
       localStorage.setItem("app_user", JSON.stringify(userData));
       toast.success(`مرحباً بك ${userData.username} — ${ROLE_LABELS[userData.role] || userData.role}`);
@@ -71,6 +69,7 @@ export const AuthProvider = ({ children }) => {
   }, [toast]);
 
   const logout = useCallback(() => {
+    invoke("logout").catch(() => {});
     setUser(null);
     localStorage.removeItem("app_user");
   }, []);
@@ -91,6 +90,15 @@ export const AuthProvider = ({ children }) => {
     } catch (_) {}
   }, [user]);
 
+  const markRecoveryConfigured = useCallback(() => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev, has_recovery_code: true };
+      localStorage.setItem("app_user", JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
   const canEditHelper = useCallback(() => canEdit(user?.role), [user?.role]);
   const isAdminHelper = useCallback(() => isAdmin(user?.role), [user?.role]);
   const hasPermissionHelper = useCallback((requiredRole) => hasPermission(user?.role, requiredRole), [user?.role]);
@@ -101,10 +109,11 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     refreshUser,
+    markRecoveryConfigured,
     canEdit: canEditHelper,
     isAdmin: isAdminHelper,
     hasPermission: hasPermissionHelper,
-  }), [user, loading, login, logout, refreshUser, canEditHelper, isAdminHelper, hasPermissionHelper]);
+  }), [user, loading, login, logout, refreshUser, markRecoveryConfigured, canEditHelper, isAdminHelper, hasPermissionHelper]);
 
   return (
     <AuthContext.Provider value={value}>

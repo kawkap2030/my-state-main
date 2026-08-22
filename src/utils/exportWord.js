@@ -33,18 +33,21 @@ export const exportToWord = (data, columns, options = {}) => {
     title = 'تقرير',
     fileName = 'report',
     hierarchyLabel = '',
-    footerSignatures = ['معد التقرير', 'مدير الصيدلية/الادارة', 'خاتم الإدارة'],
+    monthLabel = '',
+    subtitle = '',
+    periodLabel = '',
+    startMonth = '',
+    endMonth = '',
     signatures = {},
     tables = null,
   } = options;
 
-  // Use digital signatures from DB when available
+  const periodText = periodLabel || (startMonth && endMonth ? `الفترة من: ${startMonth} إلى: ${endMonth}` : subtitle);
+
+  // Digital signatures: real names from DB, or dots as fallback
   const sigPreparer = signatures?.preparerName || '';
   const sigManager = signatures?.managerName || '';
   const sigApproval = signatures?.approvalNumber || '';
-  const effectiveSignatures = sigPreparer
-    ? [sigPreparer || '.........................', sigManager || '.........................', sigApproval || '.........................']
-    : footerSignatures;
 
   const tablesHtml = tables
     ? tables.map(t => buildTableHtml(t.data, t.columns, t.title)).join('\n')
@@ -83,7 +86,9 @@ export const exportToWord = (data, columns, options = {}) => {
             <td style="text-align: right; width: 80%;">
               <div style="color: #64748b; font-size: 10pt; font-weight: bold;">جمهورية مصر العربية - الهيئة العامة للتأمين الصحي</div>
               <div class="report-title">${title}</div>
-              <div style="color: #94a3b8; font-size: 9pt;">نطاق التقرير: ${hierarchyLabel} | تاريخ التصدير: ${new Date().toLocaleDateString('ar-EG')}</div>
+              <div style="color: #475569; font-size: 9.5pt; font-weight: bold; margin-top: 4px;">
+                ${periodText ? `${periodText} | ` : ''}${monthLabel ? `شهر البيانات: ${monthLabel} | ` : ''}${hierarchyLabel ? `نطاق التقرير: ${hierarchyLabel} | ` : ''}تاريخ التصدير: ${new Date().toLocaleDateString('ar-EG')}
+              </div>
             </td>
             <td style="text-align: left; width: 20%;"><img src="${LOGO_BASE64}" width="80" height="80" /></td>
           </tr>
@@ -93,20 +98,31 @@ export const exportToWord = (data, columns, options = {}) => {
 
         ${chartHtml}
 
+        <!-- Signature titles (always visible) -->
         <table style="width: 100%; margin-top: 50px; border: none;">
           <tr>
-            <td style="width: 33%; text-align: center; font-weight: bold; text-decoration: underline;">${effectiveSignatures[0]}</td>
-            <td style="width: 33%; text-align: center; font-weight: bold; text-decoration: underline;">${effectiveSignatures[1]}</td>
-            <td style="width: 33%; text-align: center; font-weight: bold; text-decoration: underline;">${effectiveSignatures[2]}</td>
+            <td style="width: 33%; text-align: center; font-weight: bold; text-decoration: underline; font-size: 11pt;">مُعد التقرير</td>
+            <td style="width: 33%; text-align: center; font-weight: bold; text-decoration: underline; font-size: 11pt;">مدير الصيدلية / الإدارة</td>
+            <td style="width: 33%; text-align: center; font-weight: bold; text-decoration: underline; font-size: 11pt;">رقم الاعتماد / خاتم الإدارة</td>
           </tr>
           <tr>
-            <td style="text-align: center; color: #94a3b8; font-size: 9pt; padding-top: 10px;">التوقيع: .....................</td>
-            <td style="text-align: center; color: #94a3b8; font-size: 9pt; padding-top: 10px;">التوقيع: .....................</td>
-            <td style="text-align: center; color: #94a3b8; font-size: 9pt; padding-top: 10px;">التوقيع: .....................</td>
+            <td style="text-align: center; font-weight: bold; color: #0f172a; font-size: 10pt; padding-top: 6px;">الاسم: ${sigPreparer || '...........................'}</td>
+            <td style="text-align: center; font-weight: bold; color: #0f172a; font-size: 10pt; padding-top: 6px;">الاسم: ${sigManager || '...........................'}</td>
+            <td style="text-align: center; font-weight: bold; color: #0f172a; font-size: 10pt; padding-top: 6px;">رقم: ${sigApproval || '...........................'}</td>
+          </tr>
+          <tr>
+            <td style="text-align: center; color: #94a3b8; font-size: 9pt; padding-top: 6px;">التوقيع: .....................</td>
+            <td style="text-align: center; color: #94a3b8; font-size: 9pt; padding-top: 6px;">التوقيع: .....................</td>
+            <td style="text-align: center; color: #94a3b8; font-size: 9pt; padding-top: 6px;">التوقيع: .....................</td>
+          </tr>
+          <tr>
+            <td colspan="3" style="text-align: center; padding-top: 12px; border-top: 1px dashed #cbd5e1;">
+              <span style="font-size: 9pt; color: #475569; font-weight: bold;">ختم الإدارة: ........................................................</span>
+            </td>
           </tr>
         </table>
 
-        <div class="footer-branding">جميع الحقوق محفوظة © ${new Date().getFullYear()} | نظام إحصائيات الأدوية والمستلزمات الطبية</div>
+        <div class="footer-branding">جميع الحقوق محفوظة © ${new Date().getFullYear()} | منظومة إحصائيات الأدوية والمستلزمات الطبية</div>
       </div>
     </body>
     </html>

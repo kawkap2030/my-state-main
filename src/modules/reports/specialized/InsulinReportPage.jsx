@@ -20,14 +20,14 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
   Cell, PieChart, Pie, LineChart, Line 
 } from 'recharts';
-import { aggregateRecordsByPrice } from '../../../utils/reportUtils';
+import { aggregateRecordsByPrice, buildHierarchyLabel } from '../../../utils/reportUtils';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import PrintableTable from '../../../components/common/PrintableTable';
 import { toPng } from 'html-to-image';
 
 const InsulinReportPage = () => {
   const toast = useToast();
-  const { activeHierarchy } = useGlobalApp();
+  const { activeHierarchy, workspaceMode, hierarchyNames } = useGlobalApp();
   const [loading, setLoading] = useState(false);
   const [viewType, setViewType] = useState('analytical'); // 'analytical' or 'administrative'
   const [data, setData] = useState([]);
@@ -283,7 +283,8 @@ const InsulinReportPage = () => {
     let currentGroupName = '';
     for (const item of groupedData) {
       if (item.isGroupHeader) {
-        currentGroupName = typeof item.groupName === 'string' ? item.groupName.replace('تصنيف: ', '') : '';
+        const groupLabel = typeof item.groupName === 'string' ? item.groupName.replace('تصنيف: ', '') : '';
+        currentGroupName = groupLabel;
         result.push({
           ...item,
           groupName: (
@@ -291,13 +292,13 @@ const InsulinReportPage = () => {
               <span className="w-1 h-5 rounded-full" style={{ background: 'var(--color-primary)' }} />
               <span>{typeof item.groupName === 'string' ? item.groupName : ''}</span>
               <button
-                onClick={(e) => { e.stopPropagation(); toggleGroup(currentGroupName); }}
+                onClick={(e) => { e.stopPropagation(); toggleGroup(groupLabel); }}
                 className="mr-auto p-1 rounded-lg hover:bg-[var(--color-primary)]/20 transition-all cursor-pointer flex items-center gap-1"
                 style={{ color: 'var(--color-primary)' }}
-                title={collapsedGroups.has(currentGroupName) ? 'إظهار' : 'إخفاء'}
+                title={collapsedGroups.has(groupLabel) ? 'إظهار' : 'إخفاء'}
                 type="button"
               >
-                {collapsedGroups.has(currentGroupName) ? <Plus size={14} /> : <Minus size={14} />}
+                {collapsedGroups.has(groupLabel) ? <Plus size={14} /> : <Minus size={14} />}
               </button>
             </div>
           ),
@@ -362,7 +363,7 @@ const InsulinReportPage = () => {
       let chartImage = null;
       if (chartRef.current) {
         try {
-          chartImage = await toPng(chartRef.current, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+          chartImage = await toPng(chartRef.current, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
         } catch (e) { console.error(e); }
       }
       const enrichedOptions = { ...options, chartImage };
@@ -386,14 +387,30 @@ const InsulinReportPage = () => {
         toast.success('تم تصدير ملف Excel بنجاح');
         return true;
       }
-      if (type === 'word') { await exportToWord(data, exportColumns, enrichedOptions); toast.success('تم تصدير ملف Word بنجاح'); return true; }
-      if (type === 'pdf') { await exportToPDF(data, exportColumns, enrichedOptions); toast.success('تم تصدير ملف PDF بنجاح'); return true; }
+      // Word/PDF: summary table + detail table (like the premium Excel export)
+      const summaryTable = {
+        data: [
+          { indicator: 'إجمالي التكلفة', val: `${stats.totalCost.toLocaleString()} ج.م` },
+          { indicator: 'إجمالي الحالات', val: `${stats.totalCases.toLocaleString()} حالة` },
+          { indicator: 'إجمالي الكميات', val: `${stats.totalQty.toLocaleString()} عبوة` },
+          { indicator: 'النوع الأكثر طلباً', val: stats.topInsulin.name },
+        ],
+        columns: [
+          { header: 'المؤشر', accessor: 'indicator' },
+          { header: 'القيمة', accessor: 'val' },
+        ],
+        title: 'ملخص التقرير',
+      };
+      const multiTables = [summaryTable, { data, columns: exportColumns, title: 'تفاصيل صرف الإنسولين' }];
+      const wordPdfOptions = { ...enrichedOptions, tables: multiTables };
+      if (type === 'word') { await exportToWord(data, exportColumns, wordPdfOptions); toast.success('تم تصدير ملف Word بنجاح'); return true; }
+      if (type === 'pdf') { await exportToPDF(data, exportColumns, wordPdfOptions); toast.success('تم تصدير ملف PDF بنجاح'); return true; }
       return false;
     } catch (err) { console.error(err); return false; }
   };
 
   return (
-    <PrintableTable title="تقرير صرف الإنسولين التفصيلي" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="تقرير صرف الإنسولين التفصيلي" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
     <div className="space-y-6 animate-fadeIn pb-20">
       <Breadcrumb items={[{ label: 'التقارير' }, { label: 'تقرير صرف الإنسولين' }]} />
       
@@ -433,7 +450,7 @@ const InsulinReportPage = () => {
       <Card className="p-6 no-print space-y-6 shadow-sm border-slate-100">
         <div className="w-full">
           <HierarchySelector 
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}

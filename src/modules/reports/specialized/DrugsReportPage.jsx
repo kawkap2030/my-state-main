@@ -8,6 +8,7 @@ import Table from '../../../components/ui/Table';
 import ExportMenu from '../../../components/ui/ExportMenu';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
+import { useGlobalApp } from '../../../context/useGlobalApp';
 import AutoComplete from '../../../components/ui/AutoComplete';
 import { 
   Pill, Search, DollarSign, 
@@ -19,13 +20,14 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
   Cell, PieChart, Pie, LineChart, Line 
 } from 'recharts';
-import { aggregateRecordsByPrice } from '../../../utils/reportUtils';
+import { aggregateRecordsByPrice, buildHierarchyLabel } from '../../../utils/reportUtils';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import PrintableTable from '../../../components/common/PrintableTable';
 import { toPng } from 'html-to-image';
 
 const DrugsReportPage = () => {
   const toast = useToast();
+  const { workspaceMode, hierarchyNames } = useGlobalApp();
   const [loading, setLoading] = useState(false);
   const [viewType, setViewType] = useState('analytical'); // 'analytical' or 'administrative'
   const [data, setData] = useState([]);
@@ -264,21 +266,22 @@ const DrugsReportPage = () => {
     let currentGroupName = '';
     for (const item of groupedData) {
       if (item.isGroupHeader) {
-        currentGroupName = item.groupName;
+        const groupLabel = typeof item.groupName === 'string' ? item.groupName : '';
+        currentGroupName = groupLabel;
         result.push({
           ...item,
           groupName: (
             <div className="flex items-center gap-2 w-full" style={{ direction: 'rtl' }}>
               <span className="w-1 h-5 rounded-full" style={{ background: 'var(--color-primary)' }} />
-              <span>{typeof item.groupName === 'string' ? item.groupName : ''}</span>
+              <span>{groupLabel}</span>
               <button
-                onClick={(e) => { e.stopPropagation(); toggleGroup(currentGroupName); }}
+                onClick={(e) => { e.stopPropagation(); toggleGroup(groupLabel); }}
                 className="mr-auto p-1 rounded-lg hover:bg-[var(--color-primary)]/20 transition-all cursor-pointer flex items-center gap-1"
                 style={{ color: 'var(--color-primary)' }}
-                title={collapsedGroups.has(currentGroupName) ? 'إظهار' : 'إخفاء'}
+                title={collapsedGroups.has(groupLabel) ? 'إظهار' : 'إخفاء'}
                 type="button"
               >
-                {collapsedGroups.has(currentGroupName) ? <Plus size={14} /> : <Minus size={14} />}
+                {collapsedGroups.has(groupLabel) ? <Plus size={14} /> : <Minus size={14} />}
               </button>
             </div>
           ),
@@ -336,7 +339,7 @@ const DrugsReportPage = () => {
       let chartImage = null;
       if (chartRef.current) {
         try {
-          chartImage = await toPng(chartRef.current, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+          chartImage = await toPng(chartRef.current, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
         } catch (e) { console.error(e); }
       }
       const enrichedOptions = { ...options, chartImage };
@@ -360,13 +363,30 @@ const DrugsReportPage = () => {
         toast.success('تم تصدير ملف Excel بنجاح');
         return true;
       }
+      // Build multi-table data for Word/PDF: summary table + detail table
+      const summaryTable = {
+        data: [
+          { indicator: 'إجمالي التكلفة', val: `${stats.totalCost.toLocaleString()} ج.م` },
+          { indicator: 'عدد الأصناف', val: `${stats.totalItems} صنف` },
+          { indicator: 'إجمالي الكميات', val: `${stats.totalQty.toLocaleString()} وحدة` },
+          { indicator: 'الأكثر استهلاكاً', val: stats.topDrug.name },
+        ],
+        columns: [
+          { header: 'المؤشر', accessor: 'indicator' },
+          { header: 'القيمة', accessor: 'val' },
+        ],
+        title: 'ملخص التقرير',
+      };
+      const multiTables = [summaryTable, { data, columns: exportColumns, title: 'تفاصيل الصرف' }];
+      const wordPdfOptions = { ...enrichedOptions, tables: multiTables };
+
       if (type === 'word') {
-        await exportToWord(data, exportColumns, enrichedOptions);
+        await exportToWord(data, exportColumns, wordPdfOptions);
         toast.success('تم تصدير ملف Word بنجاح');
         return true;
       }
       if (type === 'pdf') {
-        await exportToPDF(data, exportColumns, enrichedOptions);
+        await exportToPDF(data, exportColumns, wordPdfOptions);
         toast.success('تم تصدير ملف PDF بنجاح');
         return true;
       }
@@ -378,7 +398,7 @@ const DrugsReportPage = () => {
   };
 
   return (
-    <PrintableTable title="تقرير الأدوية التفصيلي" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="تقرير الأدوية التفصيلي" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
       <div className="space-y-6 animate-fadeIn pb-20">
       <Breadcrumb items={[{ label: 'التقارير' }, { label: 'تقرير الأدوية التفصيلي' }]} />
       
@@ -432,7 +452,7 @@ const DrugsReportPage = () => {
       <Card className="p-6 no-print space-y-6">
         <div className="w-full">
           <HierarchySelector 
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}

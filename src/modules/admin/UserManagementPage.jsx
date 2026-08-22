@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
   Users, UserPlus, Trash2, Edit3, Key, RefreshCw,
-  Shield, Eye, Pencil, CheckCircle2, XCircle, AlertTriangle
+  Shield, Eye, Pencil, CheckCircle2, XCircle, AlertTriangle,
+  Code2, Mail, Phone, ShieldAlert, Copy, FileDown
 } from "lucide-react";
+import kawkabIcon from "/kawkab.png";
+import { useNavigate } from "react-router-dom";
 import invoke from "../../api/tauriApi";
 import { useAuth, ROLE_LABELS, ROLE_COLORS } from "../../context/AuthContext";
 import { useToast } from "../../components/ui/Toast";
@@ -13,6 +16,7 @@ import Button from "../../components/ui/Button";
 import Input from "../../components/ui/Input";
 import Modal from "../../components/ui/Modal";
 import Table from "../../components/ui/Table";
+import { copyRecoveryCode as copyRecoveryCodeShared, exportRecoveryCode as exportRecoveryCodeShared } from "../../utils/recoveryUtils";
 
 // ─── Role Badge ───────────────────────────────────────────────────────────────
 
@@ -146,6 +150,95 @@ const UserFormModal = ({ open, onClose, editUser, onSaved }) => {
   );
 };
 
+// ─── Recovery Code Modal ──────────────────────────────────────────────────────
+// Create / re-create the one-time recovery credential for an account.
+// Requires the account's CURRENT password (proof of ownership) and shows the
+// new code exactly once with copy + export options.
+const RecoveryCodeModal = ({ open, onClose, targetUser, onSaved, recoverySet }) => {
+  const toast = useToast();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [newCode, setNewCode] = useState(null);
+
+  useEffect(() => {
+    setCurrentPassword("");
+    setNewCode(null);
+  }, [open]);
+
+  const notifyRecovery = (msg, type) => (type === 'success' ? toast.success(msg) : toast.error(msg));
+  const copyCode = () => copyRecoveryCodeShared(newCode, notifyRecovery);
+  const exportCode = () => exportRecoveryCodeShared(newCode, targetUser?.username, notifyRecovery);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const code = await invoke('create_recovery_code', {
+        username: targetUser.username,
+        currentPassword,
+      });
+      setNewCode(code);
+      onSaved && onSaved();
+    } catch (err) {
+      toast.error(err || 'فشل إنشاء رمز الاسترداد');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <Modal isOpen={open} onClose={onClose} title={`رمز الاسترداد: ${targetUser?.username}`}>
+      {newCode ? (
+        <div className="space-y-4 pt-2" dir="rtl">
+          <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
+            <AlertTriangle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
+            <p className="text-xs font-bold text-amber-700 leading-relaxed">
+              احفظ رمز الاسترداد في مكان آمن. يمكن استخدامه لاستعادة الوصول إلى الحساب إذا نسيت كلمة المرور. الرمز يُعرض مرة واحدة فقط.
+            </p>
+          </div>
+          <div className="text-center p-4 rounded-2xl bg-slate-100 border border-slate-200">
+            <p className="text-[10px] font-bold text-slate-500 mb-2">رمز الاسترداد الجديد</p>
+            <p dir="ltr" className="font-mono text-lg font-black tracking-widest text-[var(--color-primary)] select-all">{newCode}</p>
+          </div>
+          <div className="flex gap-3">
+            <Button type="button" variant="secondary" icon={Copy} className="flex-1" onClick={copyCode}>نسخ الرمز</Button>
+            <Button type="button" variant="secondary" icon={FileDown} className="flex-1" onClick={exportCode}>تصدير إلى ملف</Button>
+          </div>
+          <Button type="button" variant="primary" className="w-full" onClick={onClose}>تم الحفظ — إغلاق</Button>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-5 pt-2" dir="rtl">
+          <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
+            <ShieldAlert size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
+            <p className="text-xs font-bold text-amber-700 leading-relaxed">
+              {recoverySet === false
+                ? 'لم يتم إعداد وسيلة استرداد كلمة المرور لهذا الحساب.'
+                : 'سيتم إنشاء رمز استرداد جديد يُستخدم مرة واحدة لاستعادة الوصول إذا نُسيت كلمة المرور.'}
+            </p>
+          </div>
+          <Input
+            label="كلمة المرور الحالية للحساب"
+            type="password"
+            icon={Key}
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="أدخل كلمة المرور الحالية للتأكيد"
+            required
+          />
+          <div className="flex gap-3 pt-2">
+            <Button type="submit" variant="primary" loading={loading} className="flex-1">
+              إنشاء رمز الاسترداد
+            </Button>
+            <Button type="button" variant="secondary" onClick={onClose} className="flex-1">إلغاء</Button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+};
+
 // ─── Change Password Modal ────────────────────────────────────────────────────
 
 const ChangePasswordModal = ({ open, onClose, targetUser }) => {
@@ -219,6 +312,7 @@ const ChangePasswordModal = ({ open, onClose, targetUser }) => {
 
 const UserManagementPage = () => {
   const { user: currentUser } = useAuth();
+  const navigate = useNavigate();
   const toast = useToast();
 
   const [users, setUsers] = useState([]);
@@ -226,13 +320,29 @@ const UserManagementPage = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editUser, setEditUser] = useState(null);
   const [changePassUser, setChangePassUser] = useState(null);
+  const [recoveryUser, setRecoveryUser] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  // Per-user recovery status: { username: boolean }
+  const [recoveryStatus, setRecoveryStatus] = useState({});
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
     try {
       const data = await invoke("get_users");
       setUsers(data);
+      // Fetch recovery status for every user so the UI can show
+      // "مُعد / غير مُعد" (the recovery hash itself is never exposed).
+      const status = {};
+      await Promise.all(
+        data.map(async (u) => {
+          try {
+            status[u.username] = await invoke("has_recovery_code", { username: u.username });
+          } catch {
+            status[u.username] = false;
+          }
+        })
+      );
+      setRecoveryStatus(status);
     } catch (err) {
       toast.error("فشل تحميل قائمة المستخدمين");
     } finally {
@@ -243,23 +353,6 @@ const UserManagementPage = () => {
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
-
-  const handleResetAdminPassword = async () => {
-    const confirmed = window.confirm(
-      "هل أنت متأكد من إعادة تعيين كلمة مرور المدير إلى القيمة الافتراضية؟\n\n" +
-      "اسم المستخدم: admin\n" +
-      "كلمة المرور: admin\n\n" +
-      "يمكنك تغييرها لاحقاً من أيقونة المفتاح 🔑 بجانب المستخدم."
-    );
-    if (!confirmed) return;
-
-    try {
-      const response = await invoke('reset_admin_password');
-      toast.success(response);
-    } catch (err) {
-      toast.error(err);
-    }
-  };
 
   const handleDelete = async (u) => {
     if (u.id === currentUser?.id) {
@@ -317,6 +410,21 @@ const UserManagementPage = () => {
       cell: (val) => <RoleBadge role={val} />,
     },
     {
+      header: "رمز الاسترداد",
+      accessor: "recovery_status",
+      cell: (_, row) => {
+        const isSet = !!recoveryStatus[row.username];
+        return (
+          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-black ${
+            isSet ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+          }`}>
+            {isSet ? <CheckCircle2 size={12} /> : <ShieldAlert size={12} />}
+            {isSet ? "مُعد" : "غير مُعد"}
+          </span>
+        );
+      },
+    },
+    {
       header: "تاريخ الإنشاء",
       accessor: "created_at",
       cell: (val) =>
@@ -340,6 +448,20 @@ const UserManagementPage = () => {
             title="تغيير كلمة المرور"
           >
             <Key size={15} />
+          </button>
+          <button
+            onClick={() => setRecoveryUser(row)}
+            disabled={row.id !== currentUser?.id}
+            className={`p-1.5 rounded-lg transition-colors ${
+              row.id === currentUser?.id
+                ? 'text-purple-500 hover:bg-purple-50 cursor-pointer'
+                : 'text-slate-300 opacity-40 cursor-not-allowed'
+            }`}
+            title={row.id === currentUser?.id
+              ? 'إنشاء / إعادة إنشاء رمز الاسترداد لحسابك'
+              : 'رمز الاسترداد يُنشأ من حساب المستخدم نفسه فقط (يتطلب كلمة مروره الحالية)'}
+          >
+            <ShieldAlert size={15} />
           </button>
           <button
             onClick={() => handleDelete(row)}
@@ -367,7 +489,7 @@ const UserManagementPage = () => {
         <PageHeader
           title="إدارة المستخدمين"
           icon={Users}
-          description="إضافة وتعديل وحذف حسابات المستخدمين وتحديد صلاحياتهم"
+          description="إضافة وتعديل وحذف حسابات المستخدمين وتحديد صلاحياتهم وإدارة رمز الاسترداد"
         />
         <div className="flex gap-2">
           <Button
@@ -377,14 +499,6 @@ const UserManagementPage = () => {
             loading={loading}
           >
             تحديث
-          </Button>
-          <Button
-            variant="danger"
-            className="gap-2 text-xs font-bold"
-            onClick={handleResetAdminPassword}
-          >
-            <Key size={14} />
-            إعادة تعيين كلمة سر admin
           </Button>
           <Button
             variant="primary"
@@ -494,6 +608,39 @@ const UserManagementPage = () => {
         </div>
       </Card>
 
+      {/* ═══ Designer Branding Footer ═══ */}
+      <Card className="p-5 border-2 border-[var(--color-primary)]/20">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-4">              <div className="relative group flex-shrink-0">
+              <div className="absolute -inset-1.5 rounded-full bg-gradient-to-br from-cyan-400 via-emerald-300 to-cyan-500 opacity-25 blur-sm group-hover:opacity-50 group-hover:scale-110 transition-all duration-500" />
+              <div className="relative w-14 h-14 rounded-xl overflow-hidden bg-white shadow-md border border-white/80 flex items-center justify-center p-1">
+                <img src={kawkabIcon} alt="كوكب" className="w-full h-full object-scale-down" />
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Code2 size={16} className="text-[var(--color-primary)]" />
+                <span className="text-sm font-black text-[var(--color-text)]">من إعداد وتصميم</span>
+              </div>
+              <button onClick={() => navigate('/help/about-designer')} className="text-sm font-black text-[var(--color-primary)] hover:underline hover:opacity-80 transition-all cursor-pointer">كيميائى / أحمد علي أحمد كوكب</button>
+              <p className="text-[10px] font-semibold text-[var(--color-text-muted)]">Developer & Systems Designer</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <a href="tel:01000314398" className="flex items-center gap-1.5 text-[10px] font-bold text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-colors">
+              <Phone size={12} />
+              <span dir="ltr">01000314398</span>
+            </a>
+            <a href="mailto:a.kawkab2020@gmail.com" className="flex items-center gap-1.5 text-[10px] font-bold text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-colors">
+              <Mail size={12} />
+              <span>a.kawkab2020@gmail.com</span>
+            </a>
+            <span className="text-[9px] font-bold text-[var(--color-text-muted)] opacity-50 px-2">|</span>
+            <span className="text-[9px] font-bold text-[var(--color-text-muted)] opacity-60">جميع الحقوق محفوظة © {new Date().getFullYear()}</span>
+          </div>
+        </div>
+      </Card>
+
       {/* Modals */}
       <UserFormModal
         open={showAddModal}
@@ -511,6 +658,13 @@ const UserManagementPage = () => {
         open={!!changePassUser}
         onClose={() => setChangePassUser(null)}
         targetUser={changePassUser}
+      />
+      <RecoveryCodeModal
+        open={!!recoveryUser}
+        onClose={() => setRecoveryUser(null)}
+        targetUser={recoveryUser}
+        recoverySet={recoveryUser ? !!recoveryStatus[recoveryUser.username] : false}
+        onSaved={loadUsers}
       />
     </div>
   );

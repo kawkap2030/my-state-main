@@ -4,11 +4,14 @@ import invoke from '../../api/tauriApi';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../context/AuthContext';
 import Button from '../ui/Button';
+import ConfirmModal from '../ui/ConfirmModal';
+import ExportMenu from '../ui/ExportMenu';
 
-const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth }) => {
+const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth, isLocked }) => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pendingConflict, setPendingConflict] = useState(null);
   const toast = useToast();
   const { user } = useAuth();
 
@@ -28,10 +31,20 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth }) => {
       });
 
       const gridRows = clinics.map(clinic => {
-        // Find existing morning & evening records for this clinic
-        const clinicRecords = existingTickets.filter(t => t.clinic_id === clinic.id);
-        const morningRec = clinicRecords.find(t => t.period === 'صباحي' || t.period === 'الصباحية');
-        const eveningRec = clinicRecords.find(t => t.period === 'مسائي' || t.period === 'المسائية');
+        // Find existing morning & evening records for this clinic.
+        // This grid saves aggregate (عام) tickets to WEEK 1 (see handleSaveAll), so
+        // only week-1 FREE rows feed the display — otherwise multi-week data or
+        // supported rows would be double-counted into the عام totals. It still
+        // SUMS across the four funding categories, matching what عام represents.
+        const clinicRecords = existingTickets.filter(t =>
+          t.clinic_id === clinic.id &&
+          !t.is_supported_clinic &&
+          (t.week_number || 1) === 1
+        );
+        const morningRecs = clinicRecords.filter(t => t.period === 'صباحي' || t.period === 'الصباحية');
+        const eveningRecs = clinicRecords.filter(t => t.period === 'مسائي' || t.period === 'المسائية');
+        const sumB = (recs) => recs.reduce((s, r) => s + (r.ticket_56b_count || 0), 0);
+        const sumC = (recs) => recs.reduce((s, r) => s + (r.ticket_56c_count || 0), 0);
 
         return {
           id: clinic.id,
@@ -39,10 +52,10 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth }) => {
           area_id: parseInt(areaId),
           clinic_id: clinic.id,
           branch_id: parseInt(branchId),
-          morning_56b: morningRec ? morningRec.ticket_56b_count : '',
-          morning_56c: morningRec ? morningRec.ticket_56c_count : '',
-          evening_56b: eveningRec ? eveningRec.ticket_56b_count : '',
-          evening_56c: eveningRec ? eveningRec.ticket_56c_count : ''
+          morning_56b: sumB(morningRecs) || '',
+          morning_56c: sumC(morningRecs) || '',
+          evening_56b: sumB(eveningRecs) || '',
+          evening_56c: sumC(eveningRecs) || ''
         };
       });
 
@@ -66,11 +79,27 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth }) => {
     setData(newData);
   };
 
+  // Runs the actual bulk save (used both directly and after the user
+  // confirms overwriting an already-entered period).
+  const performSave = async (payload) => {
+    await invoke('save_medical_tickets_bulk', { data: payload });
+
+    await invoke('log_frontend_action', {
+      userId: user ? user.id : null,
+      action: 'BULK_UPDATE',
+      tableName: 'medical_tickets',
+      recordId: null,
+      details: `تم الإدخال الشبكي السريع لتذاكر منطقة ${areaId} لشهر ${dispenseMonth}`
+    });
+
+    toast.success('تم حفظ التذاكر الطبية للعيادات بنجاح!');
+    await loadGridData();
+  };
+
   const handleSaveAll = async () => {
     setSaving(true);
     try {
       const payload = [];
-      const todayStr = new Date().toISOString().substring(0, 10);
 
       for (const row of data) {
         // Skip if all fields are empty
@@ -88,8 +117,7 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth }) => {
             ticket_56c_count: parseInt(row.morning_56c) || 0,
             dispense_month: dispenseMonth,
             week_number: 1,
-            is_supported_clinic: false,
-            entry_date: todayStr
+            is_supported_clinic: false
           });
         }
 
@@ -105,26 +133,51 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth }) => {
             ticket_56c_count: parseInt(row.evening_56c) || 0,
             dispense_month: dispenseMonth,
             week_number: 1,
-            is_supported_clinic: false,
-            entry_date: todayStr
+            is_supported_clinic: false
           });
         }
       }
 
       if (payload.length > 0) {
-        await invoke('save_medical_tickets_bulk', { data: payload });
-        
-        await invoke('log_frontend_action', {
-          userId: user ? user.id : null,
-          action: 'BULK_UPDATE',
-          tableName: 'medical_tickets',
-          recordId: null,
-          details: `تم الإدخال الشبكي السريع لتذاكر منطقة ${areaId} لشهر ${dispenseMonth}`
-        });
+        // ── Duplicate-period guard ─────────────────────────────────────
+        // If a period (month + scope + week + category) was already saved
+        // — from the other tickets page or this one — with DIFFERENT values,
+        // warn the user and ask for confirmation before overwriting.
+        // Re-saving identical values is allowed silently (value-aware check
+        // in Rust), while a real change requires explicit user consent.
+        const alreadyExists = await invoke('check_medical_tickets_exist', { data: payload });
+        const labels = [];
+        if (Array.isArray(alreadyExists) && alreadyExists.length > 0) {
+          alreadyExists.forEach(k => {
+            const row = data.find(r => k.clinic_id ? r.clinic_id === k.clinic_id : null);
+            const scope = row
+              ? `عيادة ${row.name || k.clinic_id}`
+              : (k.clinic_id ? `عيادة ${k.clinic_id}` : (k.area_id ? `منطقة ${k.area_id}` : `فرع ${k.branch_id}`));
+            labels.push(`${k.period === 'مسائي' ? 'مسائي' : 'صباحي'} (${scope})`);
+          });
+        }
 
-        toast.success('تم حفظ التذاكر الطبية للعيادات بنجاح!');
-        // Reload data to reflect in UI
-        await loadGridData();
+        // عام ↔ فئات replacement warning (free tickets only). Queried directly
+        // from the backend so it can never be skipped by an unloaded state.
+        const generalConflicts = await invoke('check_general_category_conflicts', { data: payload });
+        const generalWarnings = [];
+        if (Array.isArray(generalConflicts) && generalConflicts.length > 0) {
+          generalConflicts.forEach(c => {
+            const periodLabel = c.period === 'مسائي' ? 'مسائي' : c.period === 'موحد' ? 'شهري' : 'صباحي';
+            if (c.category === 'عام') {
+              generalWarnings.push(`سيتم استبدال بيانات الفئات (${c.existing_categories.join('، ')}) ببيانات عام — ${periodLabel} أسبوع ${c.week_number}`);
+            } else {
+              generalWarnings.push(`سيتم استبدال بيانات عام المدخلة سابقاً بفئة ${c.category} — ${periodLabel} أسبوع ${c.week_number}`);
+            }
+          });
+        }
+
+        if (labels.length > 0 || generalWarnings.length > 0) {
+          setPendingConflict({ payload, labels, generalWarnings });
+          return; // wait for the user's answer in the confirm modal
+        }
+
+        await performSave(payload);
       } else {
         toast.info('لم يتم إدخال أي قيم جديدة للحفظ');
       }
@@ -136,19 +189,64 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth }) => {
     }
   };
 
+  const confirmOverwrite = async () => {
+    if (!pendingConflict) return;
+    const { payload } = pendingConflict;
+    setSaving(true);
+    try {
+      await performSave(payload);
+    } catch (err) {
+      toast.error(`حدث خطأ أثناء الحفظ: ${err}`);
+      console.error(err);
+    } finally {
+      setSaving(false);
+      setPendingConflict(null);
+    }
+  };
+
   if (!areaId) return <div className="p-8 text-center opacity-60">الرجاء تحديد المنطقة لفتح الإدخال السريع للعيادات</div>;
   if (loading) return <div className="p-8 text-center flex justify-center"><RefreshCw className="animate-spin text-primary" /></div>;
 
+  // ── Quick export (Excel/Word/PDF/print) — mirrors the visible grid ──────
+  // Columns read the same flat fields the table shows; a totals row is
+  // appended so exports carry a final 'الإجمالي' line like the quick entry.
+  const exportColumns = [
+    { header: 'العيادة', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : (r.name || `عيادة ${r.clinic_id}`) },
+    { header: 'صباحي 56ب', exportAccessor: (r) => parseInt(r.morning_56b) || 0 },
+    { header: 'صباحي 56ج', exportAccessor: (r) => parseInt(r.morning_56c) || 0 },
+    { header: 'مسائي 56ب', exportAccessor: (r) => parseInt(r.evening_56b) || 0 },
+    { header: 'مسائي 56ج', exportAccessor: (r) => parseInt(r.evening_56c) || 0 },
+  ];
+  const exportData = data.length === 0 ? [] : [
+    ...data,
+    {
+      isTotalRow: true,
+      morning_56b: data.reduce((s, r) => s + (parseInt(r.morning_56b) || 0), 0),
+      morning_56c: data.reduce((s, r) => s + (parseInt(r.morning_56c) || 0), 0),
+      evening_56b: data.reduce((s, r) => s + (parseInt(r.evening_56b) || 0), 0),
+      evening_56c: data.reduce((s, r) => s + (parseInt(r.evening_56c) || 0), 0),
+    },
+  ];
+  const exportOptions = {
+    title: `التذاكر الطبية المجانية (عام) — الإدخال الشبكي السريع`,
+    fileName: `medical_tickets_grid_area${areaId}_${dispenseMonth}`,
+    subtitle: `منطقة ${areaId} — الأسبوع 1 — شهر ${dispenseMonth}`,
+    monthLabel: dispenseMonth,
+  };
+
   return (
     <div className="space-y-4 animate-slideUp">
-      <div className="flex justify-between items-center bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 shadow-sm" dir="rtl">
+      <div className="flex flex-wrap justify-between items-center gap-3 bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 shadow-sm" dir="rtl">
         <div className="flex items-center gap-2 text-sm font-bold text-indigo-700">
           <AlertCircle size={18} />
-          <span>الجدول الشبكي السريع: أدخل التذاكر لجميع عيادات المنطقة للشهر الحالي واضغط حفظ لحفظها دفعة واحدة.</span>
+          <span>الجدول الشبكي السريع: أدخل التذاكر (عام) لجميع عيادات المنطقة للأسبوع 1 من الشهر الحالي واضغط حفظ لحفظها دفعة واحدة.</span>
         </div>
-        <Button onClick={handleSaveAll} variant="primary" icon={Save} loading={saving}>
-          حفظ جميع العيادات
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportMenu data={exportData} columns={exportColumns} options={exportOptions} disabled={saving || data.length === 0} />
+          <Button onClick={handleSaveAll} variant="primary" icon={Save} loading={saving} disabled={isLocked}>
+            حفظ جميع العيادات
+          </Button>
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-[var(--color-border)] shadow-inner">
@@ -179,22 +277,43 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth }) => {
                   {row.name}
                 </td>
                 <td className="p-1">
-                  <input type="number" placeholder="0" value={row.morning_56b} onChange={e => handleInputChange(idx, 'morning_56b', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black" />
+                  <input type="number" placeholder="0" value={row.morning_56b} onChange={e => handleInputChange(idx, 'morning_56b', e.target.value)} disabled={isLocked} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black disabled:opacity-50 disabled:cursor-not-allowed" />
                 </td>
                 <td className="p-1">
-                  <input type="number" placeholder="0" value={row.morning_56c} onChange={e => handleInputChange(idx, 'morning_56c', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black" />
+                  <input type="number" placeholder="0" value={row.morning_56c} onChange={e => handleInputChange(idx, 'morning_56c', e.target.value)} disabled={isLocked} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black disabled:opacity-50 disabled:cursor-not-allowed" />
                 </td>
                 <td className="p-1">
-                  <input type="number" placeholder="0" value={row.evening_56b} onChange={e => handleInputChange(idx, 'evening_56b', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black" />
+                  <input type="number" placeholder="0" value={row.evening_56b} onChange={e => handleInputChange(idx, 'evening_56b', e.target.value)} disabled={isLocked} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black disabled:opacity-50 disabled:cursor-not-allowed" />
                 </td>
                 <td className="p-1">
-                  <input type="number" placeholder="0" value={row.evening_56c} onChange={e => handleInputChange(idx, 'evening_56c', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black" />
+                  <input type="number" placeholder="0" value={row.evening_56c} onChange={e => handleInputChange(idx, 'evening_56c', e.target.value)} disabled={isLocked} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black disabled:opacity-50 disabled:cursor-not-allowed" />
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {/* Duplicate-period overwrite confirmation */}
+      <ConfirmModal
+        isOpen={!!pendingConflict}
+        onConfirm={confirmOverwrite}
+        onCancel={() => setPendingConflict(null)}
+        title="تم إدخال الفترة من قبل"
+        message={pendingConflict ? [
+          pendingConflict.labels.length > 0
+            ? `الفترات التالية مدخلة من قبل بقيم مختلفة: ${pendingConflict.labels.join('، ')}.`
+            : '',
+          pendingConflict.generalWarnings && pendingConflict.generalWarnings.length > 0
+            ? `تنبيه: ${pendingConflict.generalWarnings.join(' — ')}.`
+            : '',
+        ].filter(Boolean).join(' ') : ''}
+        detail="يمكنك الذهاب للتعديل إذا كنت تريد تغيير البيانات — هل تريد استبدال القيم الحالية؟"
+        confirmText="استبدال البيانات"
+        cancelText="إلغاء"
+        variant="warning"
+        loading={saving}
+      />
     </div>
   );
 };

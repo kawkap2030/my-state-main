@@ -12,6 +12,7 @@ import ExportMenu from '../ui/ExportMenu';
 import { useToast } from '../ui/Toast';
 import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts';
 import PrintableTable from './PrintableTable';
+import { executePrint } from '../../utils/exportPrint';
 
 // Arabic month names for display
 const ARABIC_MONTHS = [
@@ -409,7 +410,7 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh }) => {
 
   // ─── Keyboard Shortcuts ───
   useKeyboardShortcuts([
-    { key: 'p', ctrl: true, handler: () => window.print(), description: 'طباعة' },
+    { key: 'p', ctrl: true, handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }), description: 'طباعة' },
   ]);
 
   if (loading) return (
@@ -685,7 +686,7 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh }) => {
                 <RefreshCw size={14} /> تحديث
               </button>
               <button 
-                onClick={() => window.print()} 
+                onClick={() => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true })} 
                 className="px-4 py-2 rounded-xl border border-[var(--color-border)] text-sm font-bold bg-[var(--color-bg-card)] text-[var(--color-text)] hover:bg-[var(--color-primary)] hover:text-white transition-all flex items-center gap-1"
                 title="Ctrl+P"
               >

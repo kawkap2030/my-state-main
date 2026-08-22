@@ -20,16 +20,14 @@ export const exportToExcel = async (data, columns, options = {}) => {
     fileName = 'report', 
     subtitle = '', 
     hierarchyLabel = '',
-    footerSignatures = ['معد التقرير', 'مدير الصيدلية/الادارة', 'خاتم الإدارة'],
+    monthLabel = '',
     signatures = {},
   } = options;
 
   // Use digital signatures from DB when available
   const sigPreparer = signatures?.preparerName || '';
   const sigManager = signatures?.managerName || '';
-  const effectiveSignatures = sigPreparer
-    ? [sigPreparer || '.........................', sigManager || '.........................', signatures?.approvalNumber || '.........................']
-    : footerSignatures;
+  const sigApproval = signatures?.approvalNumber || '';
   const { headers, rows } = buildDataMatrix(data, columns);
 
   const workbook = new ExcelJS.Workbook();
@@ -62,11 +60,20 @@ export const exportToExcel = async (data, columns, options = {}) => {
   egyptCell.alignment = { horizontal: 'center', vertical: 'middle' };
   currentRow++;
 
+  const periodText = options.periodLabel || (options.startMonth && options.endMonth ? `الفترة من: ${options.startMonth} إلى: ${options.endMonth}` : '');
+
   if (subtitle) {
     worksheet.mergeCells(currentRow, 1, currentRow, headers.length);
     const subCell = worksheet.getCell(currentRow, 1);
     subCell.value = subtitle;
-    subCell.font = { name: 'Arial', size: 12, color: { argb: 'FF475569' } };
+    subCell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF475569' } };
+    subCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    currentRow++;
+  } else if (periodText) {
+    worksheet.mergeCells(currentRow, 1, currentRow, headers.length);
+    const subCell = worksheet.getCell(currentRow, 1);
+    subCell.value = periodText;
+    subCell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF0891B2' } };
     subCell.alignment = { horizontal: 'center', vertical: 'middle' };
     currentRow++;
   }
@@ -77,6 +84,15 @@ export const exportToExcel = async (data, columns, options = {}) => {
     hCell.value = `النطاق: ${hierarchyLabel}`;
     hCell.font = { name: 'Arial', size: 10, color: { argb: 'FF64748B' } };
     hCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    currentRow++;
+  }
+
+  if (monthLabel) {
+    worksheet.mergeCells(currentRow, 1, currentRow, headers.length);
+    const mCell = worksheet.getCell(currentRow, 1);
+    mCell.value = `شهر البيانات: ${monthLabel}`;
+    mCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF0891B2' } };
+    mCell.alignment = { horizontal: 'center', vertical: 'middle' };
     currentRow++;
   }
 
@@ -177,26 +193,41 @@ export const exportToExcel = async (data, columns, options = {}) => {
 
   currentRow += 3;
 
-  // Signatures
-  const sigRow = worksheet.getRow(currentRow);
-  const sigTitleRow = worksheet.getRow(currentRow + 3);
+  // Signatures — unified layout: TITLES always visible, real names or dots below
+  const sigTitleRow = worksheet.getRow(currentRow);
+  const sigNameRow = worksheet.getRow(currentRow + 3);
   const sigLineRow = worksheet.getRow(currentRow + 4);
+  const sigStampRow = worksheet.getRow(currentRow + 5);
   {
     const sigSpan = Math.max(headers.length, 3);
     const col1 = 1, col2 = Math.floor(sigSpan / 2) + 1, col3 = sigSpan;
-    sigRow.getCell(col1).value = effectiveSignatures[0];
-    sigRow.getCell(col2).value = effectiveSignatures[1];
-    sigRow.getCell(col3).value = effectiveSignatures[2];
+    // Row 1: Titles (always stay, never replaced)
+    sigTitleRow.getCell(col1).value = 'مُعد التقرير';
+    sigTitleRow.getCell(col2).value = 'مدير الصيدلية / الإدارة';
+    sigTitleRow.getCell(col3).value = 'رقم الاعتماد / خاتم الإدارة';
+    // Row 2: Real names OR dots (signature values replace dots, not titles)
+    sigNameRow.getCell(col1).value = sigPreparer || '...........................';
+    sigNameRow.getCell(col2).value = sigManager || '...........................';
+    sigNameRow.getCell(col3).value = sigApproval || '...........................';
     [col1, col2, col3].forEach(c => {
-      sigRow.getCell(c).font = { name: 'Arial', size: 11, bold: true, underline: true };
-      sigRow.getCell(c).alignment = { horizontal: 'center' };
-      sigTitleRow.getCell(c).value = 'التوقيع';
-      sigTitleRow.getCell(c).font = { name: 'Arial', size: 10, color: {argb:'FF94A3B8'} };
+      sigTitleRow.getCell(c).font = { name: 'Arial', size: 11, bold: true, underline: true };
       sigTitleRow.getCell(c).alignment = { horizontal: 'center' };
-      sigLineRow.getCell(c).value = '..............................';
-      sigLineRow.getCell(c).font = { name: 'Arial', size: 10, color: {argb:'FF94A3B8'} };
+      sigNameRow.getCell(c).font = { name: 'Arial', size: 10, bold: true, color: {argb:'FF0F172A'} };
+      sigNameRow.getCell(c).alignment = { horizontal: 'center' };
+      sigLineRow.getCell(c).value = 'التوقيع: ........................';
+      sigLineRow.getCell(c).font = { name: 'Arial', size: 9, color: {argb:'FF94A3B8'} };
       sigLineRow.getCell(c).alignment = { horizontal: 'center' };
     });
+    // Row 4: Stamp — full width below the 3 columns
+    worksheet.mergeCells(currentRow + 5, 1, currentRow + 5, sigSpan);
+    sigStampRow.getCell(1).value = `ختم الإدارة: ............................................`;
+    sigStampRow.getCell(1).font = { name: 'Arial', size: 10, color: {argb:'FF475569'}, bold: true };
+    sigStampRow.getCell(1).alignment = { horizontal: 'center' };
+    // Thin line above stamp
+    for (let cc = 1; cc <= sigSpan; cc++) {
+      const cell = worksheet.getRow(currentRow + 5).getCell(cc);
+      cell.border = { top: { style: 'medium', color: {argb:'FFCBD5E1'} } };
+    }
   }
 
   // Column widths
@@ -234,7 +265,6 @@ export const exportMultiSheetExcel = async (sheetsData, globalOptions = {}) => {
     title = 'تقرير إحصائي مجمع',
     summaryData = null,
     chartImage = null,
-    footerSignatures = ['معد التقرير', 'مدير الصيدلية/الادارة', 'خاتم الإدارة']
   } = globalOptions;
 
   const workbook = new ExcelJS.Workbook();
@@ -246,17 +276,19 @@ export const exportMultiSheetExcel = async (sheetsData, globalOptions = {}) => {
       const logoId = workbook.addImage({ base64: LOGO_BASE64, extension: 'png' });
       sws.addImage(logoId, { tl: { col: 0, row: 0 }, ext: { width: 55, height: 55 } });
     } catch (e) {}
-    sws.mergeCells('B1:D1');
-    const instCell = sws.getCell('B1');
+    const summaryColCount = Math.max(4, summaryData?.headers?.length || 4);
+    // Safe merge — use try-catch to prevent "Cannot merge already merged cells"
+    try { sws.mergeCells(1, 2, 1, summaryColCount); } catch(_) {}
+    const instCell = sws.getCell(1, 2);
     instCell.value = 'جمهورية مصر العربية - الهيئة العامة للتأمين الصحي';
     instCell.font = { bold: true, size: 10, color: { argb: 'FF64748B' } };
-    sws.mergeCells('A2:D2');
-    const titleCell = sws.getCell('A2');
+    try { sws.mergeCells(2, 1, 2, summaryColCount); } catch(_) {}
+    const titleCell = sws.getCell(2, 1);
     titleCell.value = title;
     titleCell.font = { name: 'Arial', size: 18, bold: true, color: { argb: 'FF0891B2' } };
     titleCell.alignment = { horizontal: 'center' };
-    sws.mergeCells('A3:D3');
-    const dateCell = sws.getCell('A3');
+    try { sws.mergeCells(3, 1, 3, summaryColCount); } catch(_) {}
+    const dateCell = sws.getCell(3, 1);
     dateCell.value = `تاريخ التصدير: ${new Date().toLocaleDateString('ar-EG')} | بواسطة: منظومة الصرف الإلكتروني`;
     dateCell.font = { size: 9, color: { argb: 'FF94A3B8' } };
     dateCell.alignment = { horizontal: 'center' };
@@ -281,7 +313,7 @@ export const exportMultiSheetExcel = async (sheetsData, globalOptions = {}) => {
       });
       currRow++;
     });
-    sws.columns.forEach(col => { col.width = 30; });
+    sws.columns.forEach(col => { if (!col.width) col.width = 30; });
     if (chartImage) {
       try {
         const chartId = workbook.addImage({ base64: chartImage, extension: 'png' });
@@ -301,21 +333,33 @@ export const exportMultiSheetExcel = async (sheetsData, globalOptions = {}) => {
       ws.addImage(logoId, { tl: { col: 0, row: 0 }, ext: { width: 50, height: 50 } });
     } catch (e) {}
 
-    ws.mergeCells(1, 2, 1, headers.length);
+    // Safe merge — use try-catch to prevent "Cannot merge already merged cells"
+    try { ws.mergeCells(1, 2, 1, headers.length); } catch(_) {}
     const instCell = ws.getCell(1, 2);
     instCell.value = 'جمهورية مصر العربية - الهيئة العامة للتأمين الصحي';
     instCell.font = { bold: true, size: 9, color: { argb: 'FF64748B' } };
 
-    ws.mergeCells(2, 1, 2, headers.length);
+    try { ws.mergeCells(2, 1, 2, headers.length); } catch(_) {}
     const hCell = ws.getCell(2, 1);
     hCell.value = `${options.title || title} - ${sheetName}`;
     hCell.font = { bold: true, size: 14, color: { argb: 'FF0E7490' } };
     hCell.alignment = { horizontal: 'center' };
 
-    ws.mergeCells(3, 1, 3, headers.length);
+    try { ws.mergeCells(3, 1, 3, headers.length); } catch(_) {}
     const dCell = ws.getCell(3, 1);
-    dCell.value = `نطاق التقرير: ${options.hierarchyLabel || ''} | تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}`;
-    dCell.font = { size: 9, color: { argb: 'FF94A3B8' } };
+    const periodText = options.periodLabel || globalOptions.periodLabel || (options.startMonth && options.endMonth ? `الفترة من: ${options.startMonth} إلى: ${options.endMonth}` : '');
+    const hText = options.hierarchyLabel || globalOptions.hierarchyLabel || '';
+    const mText = options.monthLabel || '';
+    const subText = options.subtitle || globalOptions.subtitle || '';
+
+    const rangeParts = [
+      hText ? `النطاق: ${hText}` : '',
+      mText ? `شهر البيانات: ${mText}` : '',
+      periodText ? periodText : '',
+      subText && !subText.includes(periodText) ? subText : ''
+    ].filter(Boolean).join(' | ');
+    dCell.value = `${rangeParts ? rangeParts + ' | ' : ''}تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}`;
+    dCell.font = { size: 9, bold: true, color: { argb: 'FF475569' } };
     dCell.alignment = { horizontal: 'center' };
 
     let currentRow = 5;
@@ -360,35 +404,51 @@ export const exportMultiSheetExcel = async (sheetsData, globalOptions = {}) => {
         ws.addImage(chartId, { tl: { col: 0, row: currentRow + 2 }, ext: { width: 500, height: 250 } });
         currentRow += 15;
       } catch (e) {}
-    }
-
-    // Signatures
+    }        // Signatures — unified layout
     currentRow += 3;
-    const sigRow = ws.getRow(currentRow);
-    const sigTitleRow = ws.getRow(currentRow + 3);
+    const sigTitleRow = ws.getRow(currentRow);
+    const sigNameRow = ws.getRow(currentRow + 3);
     const sigLineRow = ws.getRow(currentRow + 4);
+    const sigStampRow = ws.getRow(currentRow + 5);
+    // Read real signature values from sheet options (passed from ExportMenuInner)
+    const sigPreparer = options?.signatures?.preparerName || '';
+    const sigManager = options?.signatures?.managerName || '';
+    const sigApproval = options?.signatures?.approvalNumber || '';
     {
       const sigSpan = Math.max(headers.length, 3);
       const col1 = 1, col2 = Math.floor(sigSpan / 2) + 1, col3 = sigSpan;
-      const sigs = options.footerSignatures || footerSignatures;
-      sigRow.getCell(col1).value = sigs[0];
-      sigRow.getCell(col2).value = sigs[1];
-      sigRow.getCell(col3).value = sigs[2];
+      // Read real signature values from sheet options (passed from ExportMenuInner)
+      // Titles (always stay)
+      sigTitleRow.getCell(col1).value = 'مُعد التقرير';
+      sigTitleRow.getCell(col2).value = 'مدير الصيدلية / الإدارة';
+      sigTitleRow.getCell(col3).value = 'رقم الاعتماد / خاتم الإدارة';
+      // Real names or dots (replace dots, not titles)
+      sigNameRow.getCell(col1).value = sigPreparer || '...........................';
+      sigNameRow.getCell(col2).value = sigManager || '...........................';
+      sigNameRow.getCell(col3).value = sigApproval || '...........................';
       [col1, col2, col3].forEach(c => {
-        sigRow.getCell(c).font = { name: 'Arial', size: 11, bold: true, underline: true };
-        sigRow.getCell(c).alignment = { horizontal: 'center' };
-        sigTitleRow.getCell(c).value = 'التوقيع';
-        sigTitleRow.getCell(c).font = { name: 'Arial', size: 10, color: { argb: 'FF94A3B8' } };
+        sigTitleRow.getCell(c).font = { name: 'Arial', size: 11, bold: true, underline: true };
         sigTitleRow.getCell(c).alignment = { horizontal: 'center' };
-        sigLineRow.getCell(c).value = '..............................';
-        sigLineRow.getCell(c).font = { name: 'Arial', size: 10, color: { argb: 'FF94A3B8' } };
+        sigNameRow.getCell(c).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+        sigNameRow.getCell(c).alignment = { horizontal: 'center' };
+        sigLineRow.getCell(c).value = 'التوقيع: ........................';
+        sigLineRow.getCell(c).font = { name: 'Arial', size: 9, color: { argb: 'FF94A3B8' } };
         sigLineRow.getCell(c).alignment = { horizontal: 'center' };
       });
+      // Stamp — full width
+      ws.mergeCells(currentRow + 5, 1, currentRow + 5, sigSpan);
+      sigStampRow.getCell(1).value = 'ختم الإدارة: ............................................';
+      sigStampRow.getCell(1).font = { name: 'Arial', size: 10, color: { argb: 'FF475569' }, bold: true };
+      sigStampRow.getCell(1).alignment = { horizontal: 'center' };
+      for (let cc = 1; cc <= sigSpan; cc++) {
+        const cell = ws.getRow(currentRow + 5).getCell(cc);
+        cell.border = { top: { style: 'medium', color: {argb:'FFCBD5E1'} } };
+      }
     }
 
-    // Branding footer
-    currentRow += 5;
-    ws.mergeCells(currentRow, 1, currentRow, headers.length);
+    // Branding footer — safe gap from signatures (stamp is at currentRow+5, need +2 more)
+    currentRow += 7;
+    try { ws.mergeCells(currentRow, 1, currentRow, headers.length); } catch(_) {}
     const brandCell = ws.getCell(currentRow, 1);
     brandCell.value = `جميع الحقوق محفوظة © ${new Date().getFullYear()} | تصميم وتطوير ك/ أحمد علي أحمد كوكب`;
     brandCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF94A3B8' } };

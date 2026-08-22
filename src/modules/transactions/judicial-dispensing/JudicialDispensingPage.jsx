@@ -44,11 +44,14 @@ import Pagination from "../../../components/ui/Pagination";
 import ConfirmModal from "../../../components/ui/ConfirmModal";
 import useKeyboardShortcuts from "../../../hooks/useKeyboardShortcuts";
 import PrintableTable from "../../../components/common/PrintableTable";
+import { buildHierarchyLabel } from "../../../utils/reportUtils";
 import StatsBar from "../../../components/common/StatsBar";
 import ExportMenu from "../../../components/ui/ExportMenu";
+import { executePrint } from "../../../utils/exportPrint";
+import useLockGuard from "../../../hooks/useLockGuard";
 
 const JudicialDispensingPage = () => {
-  const { activeHierarchy, checkIsMonthLocked } = useGlobalApp();
+  const { activeHierarchy, hierarchyNames, workspaceMode, checkIsMonthLocked } = useGlobalApp();
   const toast = useToast();
   const location = useLocation();
   const [hierarchy, setHierarchy] = useState({
@@ -58,6 +61,7 @@ const JudicialDispensingPage = () => {
     dispenseMonth:
       location.state?.dispenseMonth || activeHierarchy.dispenseMonth || new Date().toISOString().substring(0, 7),
   });
+  const { isLocked: monthLocked, LockBanner } = useLockGuard(hierarchy?.dispenseMonth);
 
   const [patients, setPatients] = useState([]);
   const [, setMedicines] = useState([]);
@@ -93,7 +97,7 @@ const JudicialDispensingPage = () => {
     {
       key: "p",
       ctrl: true,
-      handler: () => window.print(),
+      handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }),
       description: "طباعة",
     },
     {
@@ -417,12 +421,14 @@ const JudicialDispensingPage = () => {
         />
 
         <HierarchySelector
-          onSelectionChange={(data) => setHierarchy({ ...hierarchy, ...data })}
+          onSelectionChange={(data) => setHierarchy(prev => ({ ...prev, ...data }))}
           initialBranch={hierarchy.branchId}
           initialArea={hierarchy.areaId}
           initialClinic={hierarchy.clinicId}
           initialMonth={hierarchy.dispenseMonth}
         />
+
+        <LockBanner />
       </div>
 
       <div className="space-y-6">
@@ -436,6 +442,7 @@ const JudicialDispensingPage = () => {
                 value={formData.patientId}
                 onChange={handlePatientChange}
                 placeholder="ابحث عن مريض..."
+                disabled={monthLocked}
               />
 
               <div className="pt-4 border-t border-[var(--color-border)]">
@@ -487,6 +494,7 @@ const JudicialDispensingPage = () => {
                               })
                             }
                             inputClassName="text-center font-black text-lg"
+                            disabled={monthLocked}
                           />
                         </div>
                       </div>
@@ -511,19 +519,18 @@ const JudicialDispensingPage = () => {
               </div>
 
               {(() => {
-                const isLocked = checkIsMonthLocked(hierarchy.dispenseMonth);
                 return (
                   <Button
                     variant="primary"
-                    icon={isLocked ? Lock : Save}
+                    icon={monthLocked ? Lock : Save}
                     loading={saving}
                     disabled={
-                      isLocked || patientAuthorizedMedicines.length === 0
+                      monthLocked || patientAuthorizedMedicines.length === 0
                     }
                     type="submit"
                     className="w-full py-4 text-lg"
                   >
-                    {isLocked ? "الشهر مقفل" : "حفظ سجلات الصرف"}
+                    {monthLocked ? "الشهر مقفل" : "حفظ سجلات الصرف"}
                   </Button>
                 );
               })()}
@@ -691,9 +698,8 @@ const JudicialDispensingPage = () => {
             <div className="hidden print:block">
               <PrintableTable
                 title="تقرير الصرف القضائي"
-                subtitle={`الشهر: ${hierarchy.dispenseMonth} - الفرع: ${
-                  activeHierarchy.branchName || "جميع الفروع"
-                }`}
+                subtitle={`الشهر: ${hierarchy.dispenseMonth}`}
+                hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}
               >
                 <Table
                   columns={[

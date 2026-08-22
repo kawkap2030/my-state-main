@@ -329,12 +329,12 @@ const searchablePages = [
   },
   {
     path: '/reports/reconciliation',
-    label: 'المراجعة والمطابقة',
-    desc: 'مطابقة البيانات بين المصادر المختلفة',
+    label: 'الإجماليات الموحدة',
+    desc: 'كشف إجماليات جميع الفئات من مصدر واحد موحّد',
     icon: Scale,
     group: 'reports',
     groupLabel: 'التقارير المتطورة',
-    keywords: 'مطابقة reconciliation مراجعة',
+    keywords: 'إجماليات موحدة totals موحّد',
     role: 'viewer',
   },
   {

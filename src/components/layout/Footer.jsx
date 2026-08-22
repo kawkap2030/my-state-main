@@ -1,18 +1,25 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import designerImg from '../../assets/Ahmed.jpeg';
 import { Mail, Phone, Code2, Lock, Unlock } from 'lucide-react';
 import { useGlobalApp } from '../../context/useGlobalApp';
+import { useAuth } from '../../context/AuthContext';
+import invoke from '../../api/tauriApi';
 
 const Footer = () => {
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const { isMasterUnlocked, setIsMasterUnlocked } = useGlobalApp();
 
-  const handleToggleLock = () => {
+  const handleToggleLock = async () => {
     if (!isMasterUnlocked) {
       const pass = window.prompt('يرجى إدخال كلمة سر المدير لفك قفل السجلات القديمة:');
-      if (pass === 'admin123') {
+      if (pass === null) return;
+      try {
+        await invoke('verify_admin_password', { password: pass, userId: user?.id, username: user?.username });
         setIsMasterUnlocked(true);
-      } else if (pass !== null) {
-        alert('كلمة السر غير صحيحة!');
+      } catch (err) {
+        alert(err || 'كلمة السر غير صحيحة!');
       }
     } else {
       setIsMasterUnlocked(false);
@@ -31,7 +38,7 @@ const Footer = () => {
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
         {/* Info */}
         <div className="space-y-2 text-center md:text-right">
-          <h4 className="text-lg font-black text-[var(--color-primary)]">نظام إحصائيات الأدوية والمستلزمات الطبية</h4>
+          <h4 className="text-lg font-black text-[var(--color-primary)]">منظومة إحصائيات الأدوية والمستلزمات الطبية</h4>
           <p className="text-sm font-bold text-[var(--color-text-muted)]">الإصدار 2.0 - تجربة مستخدم متطورة</p>
         </div>
 
@@ -57,7 +64,7 @@ const Footer = () => {
             <div className="flex flex-col items-center md:items-end">
               <div className="flex items-center gap-2">
                 <Code2 size={16} className="text-[var(--color-primary)]" />
-                <span className="text-sm">تصميم وإعداد: ك/ أحمد علي أحمد كوكب</span>
+                <button onClick={() => navigate('/help/about-designer')} className="text-sm hover:underline hover:opacity-80 transition-all cursor-pointer text-left">تصميم وإعداد: ك/ أحمد علي أحمد كوكب</button>
               </div>
               <p className="text-[10px] text-[var(--color-text-muted)] mr-6">Developer & UI/UX Designer</p>
             </div>

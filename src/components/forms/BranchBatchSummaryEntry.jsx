@@ -4,6 +4,7 @@ import invoke from '../../api/tauriApi';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../context/AuthContext';
 import Button from '../ui/Button';
+import useLockGuard from '../../hooks/useLockGuard';
 
 const BranchBatchSummaryEntry = ({ dispenseMonth }) => {
   const [data, setData] = useState([]);
@@ -11,6 +12,7 @@ const BranchBatchSummaryEntry = ({ dispenseMonth }) => {
   const [saving, setSaving] = useState(false);
   const toast = useToast();
   const { user } = useAuth();
+  const { isLocked, checkAndWarn, LockBanner } = useLockGuard(dispenseMonth);
 
   const loadData = async () => {
     if (!dispenseMonth) return;
@@ -85,6 +87,7 @@ const BranchBatchSummaryEntry = ({ dispenseMonth }) => {
   };
 
   const handleSaveAll = async () => {
+    if (checkAndWarn()) return;
     setSaving(true);
     try {
       const items = data.map(row => ({
@@ -149,6 +152,8 @@ const BranchBatchSummaryEntry = ({ dispenseMonth }) => {
 
   return (
     <div className="space-y-4">
+      <LockBanner />
+
       {/* Header */}
       <div className="flex justify-between items-center bg-[var(--color-bg-card)] p-4 rounded-xl border border-[var(--color-border)] shadow-sm">
         <div className="flex items-center gap-2 text-sm font-bold text-[var(--color-primary)]">
@@ -159,7 +164,7 @@ const BranchBatchSummaryEntry = ({ dispenseMonth }) => {
           <Button onClick={loadData} variant="secondary" icon={RefreshCw} disabled={saving}>
             تحديث
           </Button>
-          <Button onClick={handleSaveAll} variant="success" icon={Save} loading={saving}>
+          <Button onClick={handleSaveAll} variant="success" icon={Save} loading={saving} disabled={saving || isLocked}>
             حفظ الكل
           </Button>
         </div>
@@ -171,16 +176,16 @@ const BranchBatchSummaryEntry = ({ dispenseMonth }) => {
           <thead className="bg-[var(--color-bg-card)] text-[var(--color-text-muted)] sticky top-0 z-10 font-black">
             <tr>
               <th className="p-3 border-b border-[var(--color-border)] min-w-[180px]">الفرع</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50">هيئة (مجاني)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50">طلاب (مجاني)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50">رضع (مجاني)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50">ربة بيت (مجاني)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">هيئة (مدعم - قيمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">هيئة (مدعم - مساهمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">طلاب (مدعم - قيمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">طلاب (مدعم - مساهمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">رضع (مدعم - قيمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">رضع (مدعم - مساهمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50 dark:bg-blue-950/30 text-blue-900 dark:text-blue-300">هيئة (مجاني)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50 dark:bg-blue-950/30 text-blue-900 dark:text-blue-300">طلاب (مجاني)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50 dark:bg-blue-950/30 text-blue-900 dark:text-blue-300">رضع (مجاني)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50 dark:bg-blue-950/30 text-blue-900 dark:text-blue-300">ربة بيت (مجاني)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-300">هيئة (مدعم - قيمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-300">هيئة (مدعم - مساهمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-300">طلاب (مدعم - قيمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-300">طلاب (مدعم - مساهمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-300">رضع (مدعم - قيمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-300">رضع (مدعم - مساهمة)</th>
             </tr>
           </thead>
           <tbody className="bg-[var(--color-bg)]">
@@ -210,7 +215,8 @@ const BranchBatchSummaryEntry = ({ dispenseMonth }) => {
                       type="number"
                       value={row[field]}
                       onChange={e => handleInputChange(idx, field, e.target.value)}
-                      className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-left"
+                      disabled={isLocked}
+                      className="w-full p-2 border border-[var(--color-border)] rounded bg-[var(--color-bg-card)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] text-left disabled:opacity-50 disabled:cursor-not-allowed"
                       min="0"
                       step="0.01"
                     />
@@ -251,25 +257,25 @@ const BranchBatchSummaryEntry = ({ dispenseMonth }) => {
 
       {/* Summary Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-blue-50 p-4 rounded-xl border border-blue-200">
-          <p className="text-xs text-blue-600 font-bold mb-1">إجمالي المجاني (هيئة)</p>
-          <p className="text-xl font-black text-blue-700">{totals.drugs_free_authority.toLocaleString('ar-EG')}</p>
+        <div className="bg-blue-50 dark:bg-blue-950/40 p-4 rounded-xl border border-blue-200 dark:border-blue-900/40">
+          <p className="text-xs text-blue-600 dark:text-blue-400 font-bold mb-1">إجمالي المجاني (هيئة)</p>
+          <p className="text-xl font-black text-blue-700 dark:text-blue-300">{totals.drugs_free_authority.toLocaleString('ar-EG')}</p>
         </div>
-        <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200">
-          <p className="text-xs text-emerald-600 font-bold mb-1">إجمالي المدعم (قيمة)</p>
-          <p className="text-xl font-black text-emerald-700">
+        <div className="bg-emerald-50 dark:bg-emerald-950/40 p-4 rounded-xl border border-emerald-200 dark:border-emerald-900/40">
+          <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold mb-1">إجمالي المدعم (قيمة)</p>
+          <p className="text-xl font-black text-emerald-700 dark:text-emerald-300">
             {(totals.drugs_supported_authority_value + totals.drugs_supported_students_value + totals.drugs_supported_infants_value).toLocaleString('ar-EG')}
           </p>
         </div>
-        <div className="bg-amber-50 p-4 rounded-xl border border-amber-200">
-          <p className="text-xs text-amber-600 font-bold mb-1">إجمالي المساهمة</p>
-          <p className="text-xl font-black text-amber-700">
+        <div className="bg-amber-50 dark:bg-amber-950/40 p-4 rounded-xl border border-amber-200 dark:border-amber-900/40">
+          <p className="text-xs text-amber-600 dark:text-amber-400 font-bold mb-1">إجمالي المساهمة</p>
+          <p className="text-xl font-black text-amber-700 dark:text-amber-300">
             {(totals.drugs_supported_authority_patient_share + totals.drugs_supported_students_patient_share + totals.drugs_supported_infants_patient_share).toLocaleString('ar-EG')}
           </p>
         </div>
-        <div className="bg-purple-50 p-4 rounded-xl border border-purple-200">
-          <p className="text-xs text-purple-600 font-bold mb-1">عدد الفروع</p>
-          <p className="text-xl font-black text-purple-700">{data.length}</p>
+        <div className="bg-purple-50 dark:bg-purple-950/40 p-4 rounded-xl border border-purple-200 dark:border-purple-900/40">
+          <p className="text-xs text-purple-600 dark:text-purple-400 font-bold mb-1">عدد الفروع</p>
+          <p className="text-xl font-black text-purple-700 dark:text-purple-300">{data.length}</p>
         </div>
       </div>
     </div>

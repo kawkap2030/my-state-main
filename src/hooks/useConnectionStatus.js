@@ -16,6 +16,8 @@
  *   checkNow       — function to force an immediate check
  *   wasDisconnected— true if backend was previously disconnected (for showing reconnect banner)
  *   dismissReconnect — call to dismiss the reconnect banner
+ *   dbError        — non-null when the backend DB failed its health gate
+ *                    (string message to show persistently in the UI)
  */
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { invoke } from '../api/tauriApi';
@@ -36,6 +38,12 @@ const pingBackend = async () => {
   return Math.round(performance.now() - start);
 };
 
+// ── DB health check (reads the backend health-gate flag) ─────────────
+const fetchDbStatus = async () => {
+  const res = await invoke('get_db_status');
+  return { healthy: res?.healthy !== false, error: res?.error || null };
+};
+
 const useConnectionStatus = () => {
   // Detect Tauri availability at creation time to avoid setState in effect
   const isTauriRuntime = isTauri();
@@ -44,13 +52,13 @@ const useConnectionStatus = () => {
   const [latency, setLatency] = useState(0);
   const [lastCheck, setLastCheck] = useState(null);
   const [wasDisconnected, setWasDisconnected] = useState(false);
+  const [dbError, setDbError] = useState(null);
   const statusRef = useRef(isTauriRuntime ? 'checking' : 'disconnected');
   const wasDisconnectedRef = useRef(false);
   const wasEverConnectedRef = useRef(false); // ← NEW: prevents false reload on initial startup
   const retryCountRef = useRef(0);
   const timerRef = useRef(null);
   const latencySamplesRef = useRef([]);
-  const autoReloadTimerRef = useRef(null);
 
   // Keep the ref in sync with state
   useEffect(() => {
@@ -62,30 +70,24 @@ const useConnectionStatus = () => {
   }, [wasDisconnected]);
 
   // ── Auto-reload on backend restart ────────────────────────────────
-  // When we transition from 'disconnected' → 'connected', the backend
-  // has been restarted. All Tauri IPC connections are stale.
-  // Auto-reload the page to get a fresh connection.
-  useEffect(() => {
-    if (status === 'connected' && wasDisconnectedRef.current) {
-      // Grace period: wait before reloading to let WebView settle
-      autoReloadTimerRef.current = setTimeout(() => {
-        console.log('[ConnectionStatus] Backend restarted — reloading page...');
-        window.location.reload();
-      }, DISCONNECT_GRACE_MS);
-
-      return () => {
-        if (autoReloadTimerRef.current) {
-          clearTimeout(autoReloadTimerRef.current);
-        }
-      };
-    }
-  }, [status]);
+  // Removed automatic window.location.reload() on reconnection.
+  // Forced window reloads destroy React state and reset navigation to '/'
+  // whenever a backup is restored or a heavy database save takes place.
 
   // ── Ref to hold check function (breaks circular dep for setTimeout) ─
   const checkRef = useRef(null);
 
   // ── Core check function with auto-schedule (stable — never recreated) ─
   const check = useCallback(async () => {
+    // DB health gate is checked on the same cadence so the warning banner
+    // appears (and clears after a successful restore) without extra timers.
+    try {
+      const db = await fetchDbStatus();
+      setDbError(db.healthy ? null : db.error);
+    } catch {
+      // Backend unreachable — keep the last known dbError state.
+    }
+
     try {
       const ms = await pingBackend();
 
@@ -113,11 +115,14 @@ const useConnectionStatus = () => {
     } catch {
       retryCountRef.current += 1;
 
-      // Use ref to avoid depending on `status` (which would re-create check every time)
-      if (statusRef.current === 'connected' || statusRef.current === 'checking') {
-        setStatus('disconnected');
-      } else {
-        setStatus('error');
+      // Only mark as disconnected after 3 consecutive failed pings
+      // to avoid false disconnects during brief DB locks or backup restores.
+      if (retryCountRef.current >= 3) {
+        if (statusRef.current === 'connected' || statusRef.current === 'checking') {
+          setStatus('disconnected');
+        } else {
+          setStatus('error');
+        }
       }
     }
 
@@ -150,14 +155,12 @@ const useConnectionStatus = () => {
     return () => {
       if (mountTimer) clearTimeout(mountTimer);
       if (timerRef.current) clearTimeout(timerRef.current);
-      if (autoReloadTimerRef.current) clearTimeout(autoReloadTimerRef.current);
     };
   }, [check, isTauriRuntime]);  // only runs once (check is stable)
 
   // ── Force immediate check ──────────────────────────────────────────
   const checkNow = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (autoReloadTimerRef.current) clearTimeout(autoReloadTimerRef.current);
     retryCountRef.current = 0;
     setWasDisconnected(false);
     setStatus('checking');
@@ -168,9 +171,6 @@ const useConnectionStatus = () => {
   const dismissReconnect = useCallback(() => {
     setWasDisconnected(false);
     wasDisconnectedRef.current = false;
-    if (autoReloadTimerRef.current) {
-      clearTimeout(autoReloadTimerRef.current);
-    }
   }, []);
 
   return {
@@ -181,6 +181,7 @@ const useConnectionStatus = () => {
     checkNow,
     wasDisconnected,
     dismissReconnect,
+    dbError,
   };
 };
 

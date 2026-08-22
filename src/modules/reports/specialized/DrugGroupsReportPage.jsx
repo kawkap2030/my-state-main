@@ -8,6 +8,7 @@ import Table from '../../../components/ui/Table';
 import ExportMenu from '../../../components/ui/ExportMenu';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
+import { useGlobalApp } from '../../../context/useGlobalApp';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import { toPng } from 'html-to-image';
 import { 
@@ -21,10 +22,11 @@ import {
   PieChart, Pie, Cell, LineChart, Line 
 } from 'recharts';
 import PrintableTable from '../../../components/common/PrintableTable';
-import { aggregateRecordsByPrice } from '../../../utils/reportUtils';
+import { aggregateRecordsByPrice, buildHierarchyLabel } from '../../../utils/reportUtils';
 
 const DrugGroupsReportPage = () => {
   const toast = useToast();
+  const { workspaceMode, hierarchyNames } = useGlobalApp();
   const [loading, setLoading] = useState(false);
   const [viewType, setViewType] = useState('analytical'); // 'analytical' or 'administrative'
   const [data, setData] = useState([]);
@@ -192,7 +194,7 @@ const DrugGroupsReportPage = () => {
   const handlePremiumExport = async (type, { data, columns: _columns, options }) => {
     try {
       let chartImage = null;
-      if (chartRef.current) chartImage = await toPng(chartRef.current, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+      if (chartRef.current) chartImage = await toPng(chartRef.current, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
       const enrichedOptions = { ...options, chartImage };
       if (type === 'excel') {
         const sheetsData = { 'تحليل المجموعات': { data: data, columns: exportColumns, options: enrichedOptions } };
@@ -212,14 +214,28 @@ const DrugGroupsReportPage = () => {
         toast.success('تم تصدير Excel بنجاح');
         return true;
       }
-      if (type === 'word') { await exportToWord(data, exportColumns, enrichedOptions); toast.success('تم تصدير Word بنجاح'); return true; }
-      if (type === 'pdf') { await exportToPDF(data, exportColumns, enrichedOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
+      // Word/PDF: summary table + detail table (like the premium Excel export)
+      const summaryTable = {
+        data: [
+          { indicator: 'إجمالي التكلفة', val: `${stats.totalCost.toLocaleString()} ج.م` },
+          { indicator: 'أعلى مجموعة', val: stats.highest.name },
+        ],
+        columns: [
+          { header: 'المؤشر', accessor: 'indicator' },
+          { header: 'القيمة', accessor: 'val' },
+        ],
+        title: 'ملخص التقرير',
+      };
+      const multiTables = [summaryTable, { data, columns: exportColumns, title: 'تفاصيل المجموعات' }];
+      const wordPdfOptions = { ...enrichedOptions, tables: multiTables };
+      if (type === 'word') { await exportToWord(data, exportColumns, wordPdfOptions); toast.success('تم تصدير Word بنجاح'); return true; }
+      if (type === 'pdf') { await exportToPDF(data, exportColumns, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
       return false;
     } catch (err) { console.error(err); return false; }
   };
 
   return (
-    <PrintableTable title="تقرير المجموعات الدوائية" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="تقرير المجموعات الدوائية" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
       <div className="space-y-6 animate-fadeIn pb-20">
       <Breadcrumb items={[{ label: 'التقارير' }, { label: 'تقرير المجموعات الدوائية' }]} />
       
@@ -254,7 +270,7 @@ const DrugGroupsReportPage = () => {
       <Card className="p-6 no-print space-y-6">
         <div className="w-full">
           <HierarchySelector 
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialMonth={hierarchy.dispenseMonth}
           />

@@ -8,7 +8,7 @@ const isTauri = () => {
 // ── Auto-backup ONLY for destructive operations ────────────────
 // Routine save/delete on individual items does NOT trigger backup
 // to avoid accumulation. Only high-impact operations do.
-const CRITICAL_PREFIXES = ['clear_', 'restore_', 'reset_'];
+const CRITICAL_PREFIXES = ['clear_', 'reset_'];
 
 let _backupInFlight = false;
 
@@ -65,12 +65,36 @@ let mockDrugUnits = [
   { id: 4, name: "فيال" },
 ];
 
+// Scheduled reports mock (web/dev mode) — mirrors the backend shape so the
+// Scheduled Reports page mounts, toggles and run-now work in the browser.
+let mockScheduledReports = [
+  {
+    id: 1,
+    name: "التقرير التحليلي الشهري",
+    report_type: "analytical",
+    schedule_type: "monthly",
+    day_from: 1,
+    day_to: 28,
+    output_folder: "C:\\Reports",
+    branch_id: null,
+    area_id: null,
+    clinic_id: null,
+    is_active: true,
+    last_generated: null,
+    next_run: "2026-09-01",
+    created_at: "2026-08-08 00:00:00",
+    updated_at: "2026-08-08 00:00:00",
+  },
+];
+
 let mockDrugCategories = [
   { id: 1, name: "مضادات حيوية" },
   { id: 2, name: "مسكنات" },
   { id: 3, name: "أدوية القلب" },
   { id: 4, name: "أدوية السكري" },
 ];
+
+let mockManualLocks = {};
 
 let mockDrugs = [
   {
@@ -151,10 +175,31 @@ function mockData(cmd, args) {
   const area_id = args.area_id || args.areaId;
 
   switch (cmd) {
+    // DB health + first-run (web/dev mock) — healthy DB with existing users
+    case "get_db_status":
+      return { healthy: true, error: null };
+    case "get_user_count":
+      return 1; // mock always has users → never shows the first-run setup
+    case "create_first_admin": {
+      const username = String(args.username || "admin").trim();
+      const u = { id: ++nextId, username, role: "admin" };
+      // Mirrors the backend shape: account + one-time recovery code.
+      return { user: u, recovery_code: "MOCK-AAAA-BBBB-CCCC-DDDD" };
+    }
+    case "create_recovery_code":
+      return "MOCK-AAAA-BBBB-CCCC-DDDD";
+    case "recover_password":
+      return {
+        message: "تم استعادة الوصول إلى الحساب بنجاح (وضع التطوير).",
+        recovery_code: "MOCK-EEEE-FFFF-GGGG-HHHH",
+      };
+    case "has_recovery_code":
+      return true;
+
     // Auth (web/dev mock)
     case "login": {
       const username = args.username || "";
-      const password = args.passwordHash || args.password || "";
+      const password = args.password || args.passwordHash || "";
       const mockUsers = [
         { id: 1, username: "admin", password: "admin", role: "admin" },
         { id: 2, username: "user", password: "user", role: "data_entry" },
@@ -175,12 +220,256 @@ function mockData(cmd, args) {
         { id: 3, username: "viewer", role: "viewer" },
       ];
 
+    // Lock management (web/dev mock)
+    case "get_months_with_data":
+      return ["2026-08", "2026-07", "2026-06", "2026-05", "2026-04", "2026-03", "2026-02", "2026-01"];
+    case "get_manual_locked_months":
+      return Object.entries(mockManualLocks);
+    case "toggle_month_lock": {
+      const month = args.month;
+      const lock = args.lock;
+      if (month) {
+        if (lock) {
+          mockManualLocks[month] = true;
+        } else {
+          delete mockManualLocks[month];
+        }
+      }
+      return null;
+    }
+    case "logout":
+      return null;
+    case "verify_admin_password": {
+      if (args.password === "admin123" || args.password === "admin") {
+        return true;
+      }
+      throw new Error("كلمة المرور غير صحيحة");
+    }
+    case "get_missing_months":
+      return [];
+
+    // Scheduled reports (web/dev mock) — mirrors the backend shape so the
+    // Scheduled Reports page mounts and run-now works in browser mode.
+    case "get_scheduled_reports":
+      return [...mockScheduledReports];
+    case "save_scheduled_report": {
+      const branchId = args.branchId ?? args.branch_id;
+      const areaId = args.areaId ?? args.area_id;
+      const clinicId = args.clinicId ?? args.clinic_id;
+      const isActive = args.isActive ?? args.is_active ?? true;
+      const s = {
+        id: args.id ? Number(args.id) : ++nextId,
+        name: args.name || '',
+        report_type: args.reportType || args.report_type || 'analytical',
+        schedule_type: args.scheduleType || args.schedule_type || 'monthly',
+        day_from: args.dayFrom ?? args.day_from ?? 1,
+        day_to: args.dayTo ?? args.day_to ?? 28,
+        output_folder: args.outputFolder || args.output_folder || '',
+        branch_id: branchId != null && branchId !== "" ? Number(branchId) : null,
+        area_id: areaId != null && areaId !== "" ? Number(areaId) : null,
+        clinic_id: clinicId != null && clinicId !== "" ? Number(clinicId) : null,
+        is_active: !!isActive,
+        next_run: isActive ? "2026-09-01" : "",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      if (args.id) {
+        mockScheduledReports = mockScheduledReports.map(r => Number(r.id) === Number(args.id) ? s : r);
+      } else {
+        mockScheduledReports = [...mockScheduledReports, s];
+      }
+      return s;
+    }
+    case "delete_scheduled_report":
+      mockScheduledReports = mockScheduledReports.filter(r => Number(r.id) !== Number(args.id));
+      return { success: true };
+    case "toggle_scheduled_report": {
+      const isActive = args.isActive ?? args.is_active ?? true;
+      const existing = mockScheduledReports.find(r => Number(r.id) === Number(args.id));
+      if (existing) {
+        existing.is_active = !!isActive;
+        existing.next_run = isActive ? "2026-09-01" : "";
+        existing.updated_at = new Date().toISOString();
+      }
+      const updated = existing || {
+        id: Number(args.id) || 1,
+        name: "التقرير التحليلي الشهري",
+        report_type: "analytical",
+        schedule_type: "monthly",
+        day_from: 1,
+        day_to: 28,
+        output_folder: "C:\\Reports",
+        branch_id: null,
+        area_id: null,
+        clinic_id: null,
+        is_active: !!isActive,
+        last_generated: null,
+        next_run: isActive ? "2026-09-01" : "",
+        created_at: "2026-08-08 00:00:00",
+        updated_at: new Date().toISOString(),
+      };
+      return updated;
+    }
+    case "run_scheduled_report_now": {
+      const m = args.month || new Date().toISOString().substring(0, 7);
+      const sched = mockScheduledReports.find(r => Number(r.id) === Number(args.scheduleId)) || mockScheduledReports[0] || {};
+      const [sy, smRaw] = m.split('-');
+      const sm = parseInt(smRaw, 10) || 1;
+      let periodLabel;
+      if (sched.schedule_type === 'quarterly') {
+        const q = Math.floor((sm - 1) / 3) + 1;
+        periodLabel = `الربع ${q} من ${sy}`;
+      } else if (sched.schedule_type === 'yearly') {
+        periodLabel = `سنة ${sy}`;
+      } else {
+        periodLabel = m;
+      }
+      const dFrom = sched.day_from ?? 1;
+      const dTo = sched.day_to ?? 28;
+      const dToLabel = dTo <= 0 ? 'آخر الشهر' : dTo;
+      const periodWithDays = `${periodLabel} (من يوم ${dFrom} إلى ${dToLabel})`;
+      const branch = sched.branch_id ? mockBranches.find(b => Number(b.id) === Number(sched.branch_id)) : null;
+      const area = sched.area_id ? mockAreas.find(a => Number(a.id) === Number(sched.area_id)) : null;
+      const clinic = sched.clinic_id ? mockClinics.find(c => Number(c.id) === Number(sched.clinic_id)) : null;
+      const safeName = String(sched.name || 'تقرير مجدول').replace(/[ /\\:*?"<>|]/g, '_');
+      return {
+        history_id: 1,
+        schedule: {
+          id: sched.id || 1,
+          name: sched.name || 'التقرير التحليلي الشهري',
+          output_folder: sched.output_folder || 'C:\\Reports',
+          schedule_type: sched.schedule_type || 'monthly',
+          day_from: dFrom,
+          day_to: sched.day_to,
+          branch_id: sched.branch_id,
+          area_id: sched.area_id,
+          clinic_id: sched.clinic_id,
+        },
+        title: `${sched.name || 'تقرير مجدول'} - ${periodWithDays}`,
+        month: periodWithDays,
+        timestamp: new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+        branch_name: branch ? branch.name : 'جميع الفروع',
+        area_name: area ? area.name : '',
+        clinic_name: clinic ? clinic.name : '',
+        output_folder: sched.output_folder || 'C:\\Reports',
+        rows: [
+          ["إجمالي صرف الأدوية", "45,200.50 جنيه"],
+          ["إجمالي صرف الأنسولين", "12,000.00 جنيه"],
+          ["إجمالي التذاكر الطبية", "104"],
+          ["إجمالي التكلفة", "57,200.50 جنيه"],
+        ],
+        comparison: [
+          { label: "إجمالي صرف الأدوية", current: "45,200.50 جنيه", previous: "41,800.00 جنيه", change_pct: "+8.1%" },
+          { label: "إجمالي صرف الأنسولين", current: "12,000.00 جنيه", previous: "13,500.00 جنيه", change_pct: "-11.1%" },
+          { label: "إجمالي التذاكر الطبية", current: "104", previous: "98", change_pct: "+6.1%" },
+        ],
+        filename_base: `${safeName}_${m.replace('-', '_')}_120000`,
+      };
+    }
+    case "complete_scheduled_report":
+    case "fail_scheduled_report":
+    case "cancel_scheduled_report":
+      return { success: true };
+    case "get_report_history":
+      return [];
+    case "check_due_reports":
+      return [];
+    case "write_binary_file":
+      return { success: true };
+    case "delete_file":
+      // Browser-mode mock: nothing to delete, but the caller expects success.
+      return { success: true };
+    case "pick_folder":
+      // Browser-mode mock: no native dialog — return null so the UI falls
+      // back to manual path entry.
+      return null;
+
+    // Unified totals report (web/dev mock) — mirrors the backend shape:
+    // ticket rows carry a COUNT in detailed_total (category='tickets')
+    // while all other rows carry monetary values.
+    case "get_reconciliation_report":
+      return [
+        { name: "مضادات حيوية (تفصيلي)", category: "drugs", category_name: "مضادات حيوية", detailed_total: 45200.50, monthly_total: 0, status: "INFO" },
+        { name: "مسكنات (تفصيلي)", category: "drugs", category_name: "مسكنات", detailed_total: 18750.00, monthly_total: 0, status: "INFO" },
+        { name: "أدوية القلب (تفصيلي)", category: "drugs", category_name: "أدوية القلب", detailed_total: 12100.00, monthly_total: 0, status: "INFO" },
+        { name: "المستلزمات الطبية", category: "supplies", detailed_total: 9850.00, monthly_total: 0, status: "INFO" },
+        { name: "الإنسولين — مجاني", category: "insulin", category_name: "مجاني", detailed_total: 12000.00, monthly_total: 0, status: "INFO" },
+        { name: "الإنسولين — مدعم", category: "insulin", category_name: "مدعم", detailed_total: 8600.00, monthly_total: 0, status: "INFO" },
+        { name: "الأحكام القضائية", category: "judicial", detailed_total: 5300.00, monthly_total: 0, status: "INFO" },
+        { name: "تذاكر طبية (56ب) — العدد", category: "tickets", detailed_total: 56, monthly_total: 0, status: "INFO" },
+        { name: "تذاكر طبية (56ج) — العدد", category: "tickets", detailed_total: 48, monthly_total: 0, status: "INFO" },
+        { name: "الإجمالي الكلي", category: "summary", detailed_total: 111800.50, monthly_total: 0, status: "MATCH" },
+      ];
+    case "get_reconciliation_drug_details":
+    case "get_reconciliation_insulin_details":
+      return [
+        { drug_name: "أوجمنتين 625 ملجم", unit: "علبة", quantity: 120, cases_count: 90, unit_price: 55.00, total_cost: 6600.00 },
+        { drug_name: "بانادول شريط", unit: "شريط", quantity: 240, cases_count: 180, unit_price: 14.50, total_cost: 3480.00 },
+        { drug_name: "كونكور 5 ملجم", unit: "علبة", quantity: 60, cases_count: 45, unit_price: 42.00, total_cost: 2520.00 },
+      ];
+
+    // Dashboard (web/dev mock) — so the landing page mounts cleanly
+    // and navigation to any report page is not blocked by a stale
+    // error boundary left over from a dashboard crash.
+    case "get_performance_metrics":
+      return [
+        { label: "الأدوية التفصيلية", actual: 0, unit: "ج.م", color: "var(--color-dash-1)", has_data: false, breakdown: [] },
+        { label: "الأدوية (إجماليات شهرية)", actual: 0, unit: "ج.م", color: "var(--color-dash-2)", has_data: false, breakdown: [{ label: "مجانية", value: 0, unit: "ج.م" }, { label: "مدعمة", value: 0, unit: "ج.م" }] },
+        { label: "الإنسولين", actual: 0, unit: "ج.م", color: "var(--color-dash-3)", has_data: false, breakdown: [{ label: "مجاني", value: 0, unit: "ج.م" }, { label: "مدعم", value: 0, unit: "ج.م" }] },
+        { label: "التذاكر الطبية", actual: 0, unit: "تذكرة", color: "var(--color-dash-4)", has_data: false, breakdown: [{ label: "تذاكر 56ب", value: 0, unit: "تذكرة" }, { label: "تذاكر 56ج", value: 0, unit: "تذكرة" }] },
+        { label: "المجموعات الدوائية", actual: 0, unit: "ج.م", color: "var(--color-dash-5)", has_data: false, breakdown: [] },
+        { label: "أدوية حكم المحكمة", actual: 0, unit: "ج.م", color: "var(--color-dash-6)", has_data: false, breakdown: [] },
+        { label: "منصرف المستلزمات", actual: 0, unit: "ج.م", color: "var(--color-dash-7)", has_data: false, breakdown: [] },
+      ];
+    case "get_dashboard_summary":
+      return { total_dispensed: 0, active_clinics: 0, active_clinics_level: "branch", tickets_count: 0, judicial_count: 0, authority_cost: 0, has_authority_data: false };
+    case "get_dashboard_trend":
+      return [];
+    case "get_latest_dispense_month":
+      return (() => {
+        const now = new Date();
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+      })();
+    case "get_ytd_summary":
+      return { current: 0, previous: 0 };
+    case "get_recent_activity":
+      return [];
+    case "check_month_data_exists":
+      return false;
+
+    // Export presets (signatures) — used by print preview & export settings
+    case "get_export_presets":
+      return [
+        {
+          id: 1,
+          name: "التوقيع الافتراضي",
+          user_id: null,
+          user_name: "",
+          scope: "public",
+          orientation: "landscape",
+          margin_preset: "standard",
+          show_page_numbers: true,
+          show_signatures: true,
+          preparer_name: "أحمد علي أحمد",
+          manager_name: "د. مدير الصيدلية",
+          approval_number: "اعتماد 2026/123",
+          is_default: true,
+          created_at: "2026-01-01 00:00:00",
+          updated_at: "2026-01-01 00:00:00",
+        },
+      ];
+
     case "get_branches":
       return mockBranches;
     case "get_areas":
       return mockAreas.filter(a => a.branch_id === branch_id);
     case "get_clinics":
       return mockClinics.filter(c => c.area_id === area_id);
+    case "get_areas_all":
+      return mockAreas;
+    case "get_clinics_all":
+      return mockClinics;
 
     // CRUD - Branches
     case "add_branch":
@@ -539,27 +828,72 @@ function mockData(cmd, args) {
     // Save operations
     case "save_branch_batch_summary":
       return { saved: args.items?.length || 0, skipped: 0, skipped_branches: [] };
-    // Tickets Batch Commands
+    // Tickets Batch Commands — mirrors the backend isolation-aware logic:
+    // level 'branches' → one row per branch (branchIds empty = ALL branches);
+    // level 'areas'    → one row per area (areaIds empty = all areas of the
+    //                    chosen branches);
+    // level 'clinics'  → one row per clinic (clinicIds empty = all clinics of
+    //                    the chosen areas).
     case "get_tickets_batch_for_branch":
       {
-        return mockClinics.map(c => ({
-          clinic_id: c.id,
-          clinic_name: c.name,
-          area_id: c.area_id,
-          area_name: mockAreas.find(a => a.id === c.area_id)?.name || 'منطقة',
-          branch_id: 1,
-          branch_name: 'الفرع الرئيسي',
-          morning_56b: 0,
-          morning_56c: 0,
-          evening_56b: 0,
-          evening_56c: 0,
-          morning_authority: 0,
-          morning_students: 0,
-          morning_infants: 0,
-          evening_authority: 0,
-          evening_students: 0,
-          evening_infants: 0,
-        }));
+        const level = args.level || 'branches';
+        const bIds = (args.branchIds || []).map(Number);
+        const aIds = (args.areaIds || []).map(Number);
+        const cIds = (args.clinicIds || []).map(Number);
+        const zeroRow = (clinic_id, clinic_name, area_id, area_name, branch_id, branch_name) => ({
+          clinic_id,
+          clinic_name,
+          area_id,
+          area_name,
+          branch_id,
+          branch_name,
+          morning_56b: 0, morning_56c: 0, evening_56b: 0, evening_56c: 0,
+          morning_authority: 0, morning_students: 0, morning_infants: 0,
+          evening_authority: 0, evening_students: 0, evening_infants: 0,
+          // Monthly mode (weekNumber = null) reads weeks[0..3] for the four
+          // week columns; browser mode keeps them all zero.
+          weeks: [0, 1, 2, 3].map(() => ({
+            morning_56b: 0, morning_56c: 0, evening_56b: 0, evening_56c: 0,
+            morning_authority: 0, morning_students: 0, morning_infants: 0,
+            evening_authority: 0, evening_students: 0, evening_infants: 0,
+          })),
+        });
+        const resolvedBranches = bIds.length
+          ? mockBranches.filter(b => bIds.includes(Number(b.id)))
+          : mockBranches;
+        const resolvedAreas = aIds.length
+          ? mockAreas.filter(a => aIds.includes(Number(a.id)))
+          : mockAreas.filter(a => resolvedBranches.some(b => Number(b.id) === Number(a.branch_id)));
+        const resolvedClinics = cIds.length
+          ? mockClinics.filter(c => cIds.includes(Number(c.id)))
+          : mockClinics.filter(c => resolvedAreas.some(a => Number(a.id) === Number(c.area_id)));
+
+        if (level === 'clinics') {
+          if (resolvedClinics.length > 0) {
+            return resolvedClinics.map(c => zeroRow(
+              c.id, c.name, c.area_id,
+              mockAreas.find(a => Number(a.id) === Number(c.area_id))?.name || 'منطقة',
+              mockAreas.find(a => Number(a.id) === Number(c.area_id))?.branch_id || 1,
+              mockBranches.find(b => Number(b.id) === Number(mockAreas.find(a => Number(a.id) === Number(c.area_id))?.branch_id))?.name || 'الفرع'
+            ));
+          }
+          // No clinics registered yet → fall back to one row per area
+          return resolvedAreas.map(a => zeroRow(
+            0, a.name, a.id, a.name, a.branch_id,
+            mockBranches.find(b => Number(b.id) === Number(a.branch_id))?.name || 'الفرع'
+          ));
+        }
+        if (level === 'areas') {
+          if (resolvedAreas.length > 0) {
+            return resolvedAreas.map(a => zeroRow(
+              0, a.name, a.id, a.name, a.branch_id,
+              mockBranches.find(b => Number(b.id) === Number(a.branch_id))?.name || 'الفرع'
+            ));
+          }
+          return resolvedBranches.map(b => zeroRow(0, b.name, 0, b.name, b.id, b.name));
+        }
+        // branches level
+        return resolvedBranches.map(b => zeroRow(0, b.name, 0, b.name, b.id, b.name));
       }
     case "save_tickets_batch_bulk":
       return { saved: (args.items || []).length, skipped: 0 };
@@ -597,6 +931,20 @@ function mockData(cmd, args) {
     case "delete_detailed_drug_dispensed":
       return { success: true };
     case "save_medical_tickets":
+      return { success: true, id: ++nextId };
+    case "save_medical_tickets_bulk":
+      return { saved: (args.data || []).length, updated: 0 };
+    case "get_medical_tickets_report":
+      return [];
+    case "delete_medical_tickets":
+      return { success: true };
+    case "delete_medical_tickets_by_scope":
+      // Browser mode keeps no persisted tickets → nothing to delete.
+      return 0;
+    case "check_medical_tickets_exist":
+    case "check_general_category_conflicts":
+      // Browser mode keeps no persisted tickets → no duplicates to guard.
+      return [];
     case "get_drug_groups":
       return [];
     case "get_exact_drug_groups":

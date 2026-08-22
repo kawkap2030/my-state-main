@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
-import { Gift, DollarSign, FileText, Save, Loader2, Building2, GraduationCap, Baby, Heart, Layers } from 'lucide-react';
-import LockNotificationBanner from '../common/LockNotificationBanner';
+import { Gift, DollarSign, FileText, Save, Loader2, Building2, GraduationCap, Baby, Heart } from 'lucide-react';
 import invoke from '../../api/tauriApi';
 import { useToast } from '../ui/Toast';
 import { useGlobalApp } from '../../context/useGlobalApp';
 import { useAuth } from '../../context/AuthContext';
 import { Lock, RotateCcw } from 'lucide-react';
 import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts';
+import useLockGuard from '../../hooks/useLockGuard';
 
 const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, onCancelEdit }) => {
-  const { checkIsMonthLocked, manualLockedMonths } = useGlobalApp();
+  useGlobalApp();
+  const { isLocked: monthLocked, LockBanner } = useLockGuard(hierarchy?.dispenseMonth);
   const [formData, setFormData] = useState({
     drugs_free_authority: 0,
     drugs_free_students: 0,
@@ -21,7 +22,6 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
     drugs_supported_students_patient_share: 0,
     drugs_supported_infants_value: 0,
     drugs_supported_infants_patient_share: 0,
-    supplies_total_value: 0,
     notes: '',
   });
   const [currentId, setCurrentId] = useState(null);
@@ -43,7 +43,6 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
         drugs_supported_students_patient_share: 0,
         drugs_supported_infants_value: 0,
         drugs_supported_infants_patient_share: 0,
-        supplies_total_value: 0,
         notes: '',
       });
       setCurrentId(null);
@@ -63,7 +62,6 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
         drugs_supported_students_patient_share: 0,
         drugs_supported_infants_value: 0,
         drugs_supported_infants_patient_share: 0,
-        supplies_total_value: 0,
         notes: '',
       });
       setCurrentId(null);
@@ -81,7 +79,6 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
         drugs_supported_students_patient_share: 0,
         drugs_supported_infants_value: 0,
         drugs_supported_infants_patient_share: 0,
-        supplies_total_value: 0,
         notes: '',
       });
       setCurrentId(null);
@@ -97,10 +94,35 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
         dispenseMonth: hierarchy.dispenseMonth
       });
       if (data) {
-        // Only set currentId for reference, don't populate formData automatically
         setCurrentId(data.id);
+        setFormData({
+          drugs_free_authority: data.drugs_free_authority || 0,
+          drugs_free_students: data.drugs_free_students || 0,
+          drugs_free_infants: data.drugs_free_infants || 0,
+          drugs_free_breadwinner_women: data.drugs_free_breadwinner_women || 0,
+          drugs_supported_authority_value: data.drugs_supported_authority_value || 0,
+          drugs_supported_authority_patient_share: data.drugs_supported_authority_patient_share || 0,
+          drugs_supported_students_value: data.drugs_supported_students_value || 0,
+          drugs_supported_students_patient_share: data.drugs_supported_students_patient_share || 0,
+          drugs_supported_infants_value: data.drugs_supported_infants_value || 0,
+          drugs_supported_infants_patient_share: data.drugs_supported_infants_patient_share || 0,
+          notes: data.notes || '',
+        });
       } else {
         setCurrentId(null);
+        setFormData({
+          drugs_free_authority: 0,
+          drugs_free_students: 0,
+          drugs_free_infants: 0,
+          drugs_free_breadwinner_women: 0,
+          drugs_supported_authority_value: 0,
+          drugs_supported_authority_patient_share: 0,
+          drugs_supported_students_value: 0,
+          drugs_supported_students_patient_share: 0,
+          drugs_supported_infants_value: 0,
+          drugs_supported_infants_patient_share: 0,
+          notes: '',
+        });
       }
     } catch (e) {
       console.error(e);
@@ -108,7 +130,7 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
     } finally {
       setLoading(false);
     }
-  }, [hierarchy?.branchId, hierarchy?.areaId, hierarchy?.clinicId, hierarchy?.dispenseMonth, hierarchy?.level]);
+  }, [hierarchy?.branchId, hierarchy?.areaId, hierarchy?.clinicId, hierarchy?.dispenseMonth, hierarchy?.level, toast]);
 
   React.useEffect(() => {
     fetchData();
@@ -128,7 +150,6 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
         drugs_supported_students_patient_share: editRecord.drugs_supported_students_patient_share || 0,
         drugs_supported_infants_value: editRecord.drugs_supported_infants_value || 0,
         drugs_supported_infants_patient_share: editRecord.drugs_supported_infants_patient_share || 0,
-        supplies_total_value: editRecord.supplies_total_value || 0,
         notes: editRecord.notes || '',
       });
       setCurrentId(editRecord.id);
@@ -145,7 +166,6 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
         drugs_supported_students_patient_share: 0,
         drugs_supported_infants_value: 0,
         drugs_supported_infants_patient_share: 0,
-        supplies_total_value: 0,
         notes: '',
       });
       setCurrentId(null);
@@ -164,7 +184,6 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
       drugs_supported_students_patient_share: 0,
       drugs_supported_infants_value: 0,
       drugs_supported_infants_patient_share: 0,
-      supplies_total_value: 0,
       notes: '',
     });
     setCurrentId(null);
@@ -248,7 +267,6 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
         drugs_supported_students_patient_share: 0,
         drugs_supported_infants_value: 0,
         drugs_supported_infants_patient_share: 0,
-        supplies_total_value: 0,
         notes: '',
       });
       setCurrentId(null);
@@ -286,22 +304,10 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
     );
   }
 
-  const monthLocked = hierarchy?.dispenseMonth ? checkIsMonthLocked(hierarchy.dispenseMonth) : false;
-  const lockIsManual = monthLocked ? manualLockedMonths[hierarchy?.dispenseMonth] !== undefined : false;
-  const lockIsSmart = monthLocked ? (manualLockedMonths[hierarchy?.dispenseMonth] === undefined) : false;
-
   return (
     <div className="space-y-6 animate-fadeIn" dir="rtl">
 
-      {/* Lock Notification Banner */}
-      {monthLocked && (
-        <LockNotificationBanner
-          dispenseMonth={hierarchy?.dispenseMonth}
-          isLocked={true}
-          isManual={lockIsManual}
-          isSmart={lockIsSmart}
-        />
-      )}
+      <LockBanner />
 
       {/* Free Drugs Section */}
       {(mode === 'all' || mode === 'free') && (
@@ -328,7 +334,8 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
                     placeholder="0"
                     value={formData[key] || ''}
                     onChange={(e) => handleChange(key, e.target.value)}
-                    className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-3 rounded-xl text-base font-bold text-center text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)] transition-all"
+                    disabled={monthLocked}
+                    className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-3 rounded-xl text-base font-bold text-center text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-[var(--color-text-muted)]">جنيه</span>
                 </div>
@@ -364,7 +371,8 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
                     placeholder="0.00"
                     value={formData[key] || ''}
                     onChange={(e) => handleChange(key, e.target.value)}
-                    className={`w-full bg-[var(--color-bg)] border outline-none p-3 rounded-xl text-base font-bold text-center text-[var(--color-text)] focus:ring-2 transition-all ${type === 'value' ? 'border-[var(--color-success)]/30 focus:ring-[var(--color-success)]/20 focus:border-[var(--color-success)]' : 'border-[var(--color-warning)]/30 focus:ring-[var(--color-warning)]/20 focus:border-[var(--color-warning)]'}`}
+                    disabled={monthLocked}
+                    className={`w-full bg-[var(--color-bg)] border outline-none p-3 rounded-xl text-base font-bold text-center text-[var(--color-text)] focus:ring-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${type === 'value' ? 'border-[var(--color-success)]/30 focus:ring-[var(--color-success)]/20 focus:border-[var(--color-success)]' : 'border-[var(--color-warning)]/30 focus:ring-[var(--color-warning)]/20 focus:border-[var(--color-warning)]'}`}
                   />
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-[var(--color-text-muted)]">ج.م</span>
                 </div>
@@ -374,52 +382,19 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
         </section>
       )}
 
-      {/* Medical Supplies Section */}
-      {(mode === 'all' || mode === 'supplies') && (
-        <section className="space-y-4">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2.5 rounded-xl bg-[var(--color-info-bg)] text-[var(--color-info)] shadow-sm border border-[var(--color-info)]/20">
-              <Layers size={22} />
-            </div>
-            <div>
-              <h3 className="text-lg font-black text-[var(--color-text)]">المستلزمات الطبية</h3>
-            </div>
-          </div>
-          <div className="max-w-md">
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 text-xs font-bold text-[var(--color-text-muted)]">
-                <Layers size={14} />
-                <span>إجمالي قيمة المستلزمات</span>
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="0.00"
-                  value={formData.supplies_total_value || ''}
-                  onChange={(e) => handleChange('supplies_total_value', e.target.value)}
-                  className="w-full bg-[var(--color-bg)] border border-[var(--color-info)]/30 outline-none p-3 rounded-xl text-xl font-black text-center text-[var(--color-info)] focus:ring-2 focus:ring-[var(--color-info)]/20 focus:border-[var(--color-info)] transition-all"
-                />
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-[var(--color-text-muted)]">ج.م</span>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
       {/* Notes */}
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-xs font-bold text-[var(--color-text-muted)]">
           <FileText size={14} />
           <span>ملاحظات</span>
-        </label>
-        <textarea
-          rows="3"
-          className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-4 rounded-xl text-sm font-medium text-right text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)] transition-all resize-none"
-          placeholder="أضف أي ملاحظات تتعلق بصرف هذا الشهر..."
-          value={formData.notes}
-          onChange={(e) => handleChange('notes', e.target.value)}
-        />
+        </label>          <textarea
+            rows="3"
+            disabled={monthLocked}
+            className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-4 rounded-xl text-sm font-medium text-right text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)] transition-all resize-y disabled:opacity-50 disabled:cursor-not-allowed"
+            placeholder="أضف أي ملاحظات تتعلق بصرف هذا الشهر..."
+            value={formData.notes}
+            onChange={(e) => handleChange('notes', e.target.value)}
+          />
       </div>
 
       {/* Total Display + Save Button */}
@@ -429,7 +404,6 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
             .filter(([key]) => {
               if (mode === 'free') return key.startsWith('drugs_free');
               if (mode === 'supported') return key.startsWith('drugs_supported') && key.endsWith('value');
-              if (mode === 'supplies') return key === 'supplies_total_value';
               return true;
             })
             .reduce((sum, [_, val]) => sum + (parseFloat(val) || 0), 0)
@@ -441,18 +415,19 @@ const MonthlyDispensedForm = ({ hierarchy, mode = 'all', onSuccess, editRecord, 
       <div className="flex gap-4">
         <button
           onClick={resetForm}
-          className="flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-base transition-all bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] hover:bg-slate-50"
+          disabled={monthLocked}
+          className="flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-base transition-all bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RotateCcw size={22} />
           <span>تفريغ الصناديق</span>
         </button>
         <button 
           onClick={handleSave} 
-          disabled={saving || !hierarchy?.branchId || checkIsMonthLocked(hierarchy.dispenseMonth)} 
-          className={`flex-[3] flex items-center justify-center gap-3 py-4 rounded-2xl font-black text-base transition-all duration-300 shadow-lg ${saving || !hierarchy?.branchId || checkIsMonthLocked(hierarchy.dispenseMonth) ? 'bg-[var(--color-bg)] text-[var(--color-text-muted)] cursor-not-allowed border border-[var(--color-border)]' : 'bg-gradient-to-r from-[var(--color-primary)] to-cyan-500 text-white hover:shadow-xl hover:-translate-y-1 hover:shadow-cyan-500/50 shadow-cyan-500/30 active:translate-y-0 active:scale-[0.98]'}`}
+          disabled={saving || !hierarchy?.branchId || monthLocked} 
+          className={`flex-[3] flex items-center justify-center gap-3 py-4 rounded-2xl font-black text-base transition-all duration-300 shadow-lg ${saving || !hierarchy?.branchId || monthLocked ? 'bg-[var(--color-bg)] text-[var(--color-text-muted)] cursor-not-allowed border border-[var(--color-border)]' : 'bg-gradient-to-r from-[var(--color-primary)] to-cyan-500 text-white hover:shadow-xl hover:-translate-y-1 hover:shadow-cyan-500/50 shadow-cyan-500/30 active:translate-y-0 active:scale-[0.98]'}`}
         >
-          {saving ? <Loader2 size={22} className="animate-spin" /> : (checkIsMonthLocked(hierarchy.dispenseMonth) ? <Lock size={22} /> : <Save size={22} />)}
-          <span>{saving ? 'جاري الحفظ...' : (checkIsMonthLocked(hierarchy.dispenseMonth) ? 'الشهر مقفل' : '✓ حفظ سجل الصرف')}</span>
+          {saving ? <Loader2 size={22} className="animate-spin" /> : (monthLocked ? <Lock size={22} /> : <Save size={22} />)}
+          <span>{saving ? 'جاري الحفظ...' : (monthLocked ? 'الشهر مقفل' : '✓ حفظ سجل الصرف')}</span>
         </button>
       </div>
     </div>

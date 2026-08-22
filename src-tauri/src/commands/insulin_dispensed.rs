@@ -1,7 +1,11 @@
 use crate::db::AppState;
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use crate::commands::month_isolation::enforce_isolation_lock;
+use rusqlite::OptionalExtension;
+use crate::commands::month_isolation::{
+    enforce_isolation_lock, enforce_isolation_lock_guard, cleanup_isolation_lock_if_empty,
+    validate_non_negative_f64, validate_strictly_positive_f64, validate_strictly_positive_i32,
+};
 use crate::commands::audit::log_action;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -31,6 +35,12 @@ pub fn save_insulin_dispensed(
 ) -> Result<i32, String> {
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+
+    // --- 0. Negative value validation ---
+    validate_strictly_positive_i32("عدد الحالات", data.cases_count)?;
+    validate_strictly_positive_f64("سعر الوحدة", data.price)?;
+    validate_non_negative_f64("الكمية", data.quantity)?;
+    validate_non_negative_f64("التكلفة", data.cost)?;
 
     // --- 1. Global Month Isolation Lock ---
     let current_level = if data.clinic_id.is_some() { "clinic" } 
@@ -101,33 +111,35 @@ pub fn save_insulin_dispensed(
     }
 
     // --- 3. Duplicate Record Check (Within Same Level) ---
-    // Prevent exactly same record (same insulin, location, month, quantity, price)
-    if data.id.is_none() {
-        let exists_duplicate: bool = conn.query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM insulin_dispensed 
-                WHERE name = ?1 AND dispense_month = ?2 AND branch_id = ?3 
-                AND (area_id IS ?4)
-                AND (clinic_id IS ?5)
-                AND ABS(price - ?6) < 0.001
-                AND category = ?7 AND type = ?8
-             )",
-            rusqlite::params![
-                data.name, 
-                data.dispense_month, 
-                data.branch_id, 
-                data.area_id, 
-                data.clinic_id,
-                data.price,
-                data.category,
-                data.type_
-            ],
-            |row| row.get(0)
-        ).unwrap_or(false);
+    // Prevent exactly same record (same insulin, location, month, price,
+    // category, type) — enforced on BOTH insert and update, excluding self.
+    let exclude_id = data.id.unwrap_or(-1);
+    let exists_duplicate: bool = conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM insulin_dispensed 
+            WHERE name = ?1 AND dispense_month = ?2 AND branch_id = ?3 
+            AND (area_id IS ?4)
+            AND (clinic_id IS ?5)
+            AND ABS(price - ?6) < 0.001
+            AND category = ?7 AND type = ?8
+            AND id != ?9
+         )",
+        rusqlite::params![
+            data.name, 
+            data.dispense_month, 
+            data.branch_id, 
+            data.area_id, 
+            data.clinic_id,
+            data.price,
+            data.category,
+            data.type_,
+            exclude_id
+        ],
+        |row| row.get(0)
+    ).unwrap_or(false);
 
-        if exists_duplicate {
-            return Err("يوجد ادخال سابق للصنف بنفس السعر يمكنك مراجعة الصنف والتعديل عليه".to_string());
-        }
+    if exists_duplicate {
+        return Err("يوجد ادخال سابق للصنف بنفس السعر يمكنك مراجعة الصنف والتعديل عليه".to_string());
     }
 
     if let Some(id) = data.id {
@@ -302,8 +314,27 @@ pub fn delete_insulin_dispensed(
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    let rec: Option<(i32, Option<i32>, Option<i32>, String)> = conn.query_row(
+        "SELECT branch_id, area_id, clinic_id, dispense_month 
+         FROM insulin_dispensed WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional().map_err(|e| e.to_string())?;
+
+    let (branch_id, area_id, clinic_id, dispense_month) = match rec {
+        Some(r) => r,
+        None => return Err("السجل غير موجود".to_string()),
+    };
+
+    let current_level = if clinic_id.is_some() { "clinic" }
+                        else if area_id.is_some() { "area" }
+                        else { "branch" };
+    enforce_isolation_lock_guard(conn, branch_id, &dispense_month, current_level)?;
+
     conn.execute("DELETE FROM insulin_dispensed WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
+
+    cleanup_isolation_lock_if_empty(conn, branch_id, &dispense_month)?;
     
     // Audit log
     let _ = log_action(

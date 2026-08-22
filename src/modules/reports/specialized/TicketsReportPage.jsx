@@ -19,6 +19,7 @@ import {
   Cell, PieChart, Pie, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts';
 import PrintableTable from '../../../components/common/PrintableTable';
+import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import useReportSignatures from '../../../hooks/useReportSignatures';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import { toPng } from 'html-to-image';
@@ -36,11 +37,11 @@ const TABLE_VIEW_MODES = [
   { key: 'supported', label: 'مدعومة', icon: HelpCircle, color: 'bg-emerald-500' },
 ];
 
-const categories = ["هيئة", "طلاب", "رضع", "المرأة المعيلة"];
+const categories = ["هيئة", "طلاب", "رضع"];
 
 const TicketsReportPage = () => {
   const toast = useToast();
-  const { activeHierarchy } = useGlobalApp();
+  const { activeHierarchy, workspaceMode, hierarchyNames } = useGlobalApp();
   const { signatures } = useReportSignatures();
   const [, setLoading] = useState(false);
   const [data, setData] = useState([]);
@@ -224,7 +225,7 @@ const TicketsReportPage = () => {
     const s = {
       total56b: 0, total56c: 0,
       ownedTotal: 0, supportedTotal: 0,
-      supportedHayaa: 0, supportedTullab: 0, supportedRudda3: 0, supportedWoman: 0,
+      supportedHayaa: 0, supportedTullab: 0, supportedRudda3: 0,
       ownedHayaa56b: 0, ownedHayaa56c: 0,
       ownedTullab56b: 0, ownedTullab56c: 0,
       ownedRudda356b: 0, ownedRudda356c: 0,
@@ -241,7 +242,6 @@ const TicketsReportPage = () => {
         if (r.category === 'هيئة') s.supportedHayaa += total;
         if (r.category === 'طلاب') s.supportedTullab += total;
         if (r.category === 'رضع') s.supportedRudda3 += total;
-        if (r.category === 'المرأة المعيلة') s.supportedWoman += total;
       } else {
         s.ownedTotal += total;
         s.total56b += r.ticket_56b_count;
@@ -373,7 +373,7 @@ const TicketsReportPage = () => {
       let chartImage = null;
       if (chartRef.current) {
         try {
-          chartImage = await toPng(chartRef.current, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+          chartImage = await toPng(chartRef.current, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
         } catch (chartErr) {
           console.warn('Failed to capture chart image for export:', chartErr);
         }
@@ -512,7 +512,7 @@ const TicketsReportPage = () => {
 
   const renderSupportedRows = () => {
     const paginatedData = getProcessedData(true).data;
-    if (paginatedData.length === 0) return <tr><td colSpan={19} className="p-8 text-center text-slate-500 font-bold">لا توجد سجلات حالياً</td></tr>;
+    if (paginatedData.length === 0) return <tr><td colSpan={18} className="p-8 text-center text-slate-500 font-bold">لا توجد سجلات حالياً</td></tr>;
     
     const grouped = {};
     paginatedData.forEach(row => {
@@ -529,11 +529,11 @@ const TicketsReportPage = () => {
       const isExpanded = expandedSupportedAreas[areaName];
       
       const areaTotals = {
-        w1_هيئة: 0, w1_طلاب: 0, w1_رضع: 0, 'w1_المرأة المعيلة': 0,
-        w2_هيئة: 0, w2_طلاب: 0, w2_رضع: 0, 'w2_المرأة المعيلة': 0,
-        w3_هيئة: 0, w3_طلاب: 0, w3_رضع: 0, 'w3_المرأة المعيلة': 0,
-        w4_هيئة: 0, w4_طلاب: 0, w4_رضع: 0, 'w4_المرأة المعيلة': 0,
-        total_هيئة: 0, total_طلاب: 0, total_رضع: 0, 'total_المرأة المعيلة': 0,
+        w1_هيئة: 0, w1_طلاب: 0, w1_رضع: 0,
+        w2_هيئة: 0, w2_طلاب: 0, w2_رضع: 0,
+        w3_هيئة: 0, w3_طلاب: 0, w3_رضع: 0,
+        w4_هيئة: 0, w4_طلاب: 0, w4_رضع: 0,
+        total_هيئة: 0, total_طلاب: 0, total_رضع: 0,
         total: 0
       };
       
@@ -558,13 +558,11 @@ const TicketsReportPage = () => {
               <td className="p-4 text-center font-bold text-slate-500/80">{areaTotals[`w${w}_هيئة`]}</td>
               <td className="p-4 text-center font-bold text-slate-500/80">{areaTotals[`w${w}_طلاب`]}</td>
               <td className="p-4 text-center font-bold text-slate-500/80">{areaTotals[`w${w}_رضع`]}</td>
-              <td className="p-4 text-center font-bold text-slate-500/80">{areaTotals[`w${w}_المرأة المعيلة`]}</td>
             </React.Fragment>
           ))}
           <td className="p-4 text-center font-black text-blue-600 bg-blue-50/50">{areaTotals.total_هيئة}</td>
           <td className="p-4 text-center font-black text-emerald-600 bg-emerald-50/50">{areaTotals.total_طلاب}</td>
           <td className="p-4 text-center font-black text-amber-600 bg-amber-50/50">{areaTotals.total_رضع}</td>
-          <td className="p-4 text-center font-black text-fuchsia-600 bg-fuchsia-50/50">{areaTotals['total_المرأة المعيلة']}</td>
           <td className="p-4 text-center font-black bg-[var(--color-primary)]/10 text-[var(--color-primary)]">{areaTotals.total}</td>
         </tr>
       );
@@ -580,13 +578,11 @@ const TicketsReportPage = () => {
                   <td className="p-4 text-center border-x font-mono">{row[`w${w}_هيئة`]}</td>
                   <td className="p-4 text-center border-x font-mono">{row[`w${w}_طلاب`]}</td>
                   <td className="p-4 text-center border-x font-mono">{row[`w${w}_رضع`]}</td>
-                  <td className="p-4 text-center border-x font-mono">{row[`w${w}_المرأة المعيلة`]}</td>
                 </React.Fragment>
               ))}
               <td className="p-4 text-center font-black text-blue-600 bg-blue-50/10">{row.total_هيئة}</td>
               <td className="p-4 text-center font-black text-emerald-600 bg-emerald-50/10">{row.total_طلاب}</td>
               <td className="p-4 text-center font-black text-amber-600 bg-amber-50/10">{row.total_رضع}</td>
-              <td className="p-4 text-center font-black text-fuchsia-600 bg-fuchsia-50/10">{row['total_المرأة المعيلة']}</td>
               <td className="p-4 text-center font-black bg-[var(--color-primary)]/10 text-[var(--color-primary)]">{row.total}</td>
             </tr>
           );
@@ -621,7 +617,7 @@ const TicketsReportPage = () => {
       <Card className="p-6 no-print">
         <div className="w-full">
           <HierarchySelector 
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}
@@ -758,11 +754,6 @@ const TicketsReportPage = () => {
               <span className="block text-[10px] text-amber-200 mb-1">رضع</span>
               <span className="text-lg">{stats.supportedRudda3.toLocaleString()}</span>
             </div>
-            <div className="w-px bg-white/10" />
-            <div className="flex-1 text-center">
-              <span className="block text-[10px] text-fuchsia-200 mb-1">مرأة معيلة</span>
-              <span className="text-lg">{stats.supportedWoman.toLocaleString()}</span>
-            </div>
           </div>
         </div>
       </div>
@@ -855,8 +846,7 @@ const TicketsReportPage = () => {
                     data={[
                       { name: 'هيئة', value: stats.supportedHayaa, color: '#3b82f6' },
                       { name: 'طلاب', value: stats.supportedTullab, color: '#10b981' },
-                      { name: 'رضع', value: stats.supportedRudda3, color: '#f59e0b' },
-                      { name: 'مرأة معيلة', value: stats.supportedWoman, color: '#d946ef' }
+                      { name: 'رضع', value: stats.supportedRudda3, color: '#f59e0b' }
                     ]}
                     cx="50%" cy="50%"
                     innerRadius={60}
@@ -867,8 +857,7 @@ const TicketsReportPage = () => {
                     {[
                       { name: 'هيئة', value: stats.supportedHayaa, color: '#3b82f6' },
                       { name: 'طلاب', value: stats.supportedTullab, color: '#10b981' },
-                      { name: 'رضع', value: stats.supportedRudda3, color: '#f59e0b' },
-                      { name: 'مرأة معيلة', value: stats.supportedWoman, color: '#d946ef' }
+                      { name: 'رضع', value: stats.supportedRudda3, color: '#f59e0b' }
                     ].map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
@@ -1025,6 +1014,7 @@ const TicketsReportPage = () => {
           <PrintableTable
             title="تقرير التذاكر الطبية - العيادات المملوكة"
             subtitle={`شهر ${hierarchy.dispenseMonth}${periodFilter !== 'all' ? ` (${periodFilter})` : ''}`}
+            hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}
             showSignatures={false}
           >
           <div className="only-print">
@@ -1080,11 +1070,11 @@ const TicketsReportPage = () => {
                   <tr className="text-[var(--color-text)] font-black uppercase">
                     <th className="p-4 w-12 text-center" rowSpan={2}>#</th>
                     <th className="p-4" rowSpan={2}>العيادة</th>
-                    <th className="p-4 text-center border-x border-emerald-100" colSpan={4}>الأول</th>
-                    <th className="p-4 text-center border-x border-emerald-100" colSpan={4}>الثاني</th>
-                    <th className="p-4 text-center border-x border-emerald-100" colSpan={4}>الثالث</th>
-                    <th className="p-4 text-center border-x border-emerald-100" colSpan={4}>الرابع</th>
-                    <th className="p-4 text-center bg-emerald-100/30" colSpan={5}>الإجمالي العام</th>
+                    <th className="p-4 text-center border-x border-emerald-100" colSpan={3}>الأول</th>
+                    <th className="p-4 text-center border-x border-emerald-100" colSpan={3}>الثاني</th>
+                    <th className="p-4 text-center border-x border-emerald-100" colSpan={3}>الثالث</th>
+                    <th className="p-4 text-center border-x border-emerald-100" colSpan={3}>الرابع</th>
+                    <th className="p-4 text-center bg-emerald-100/30" colSpan={4}>الإجمالي العام</th>
                   </tr>
                   <tr className="bg-[var(--color-bg-card)] text-[10px] border-b border-[var(--color-border)] text-[var(--color-text-muted)]">
                     {[1, 2, 3, 4].map((w) => (
@@ -1092,13 +1082,11 @@ const TicketsReportPage = () => {
                         <th className="p-2 border-x">هيئة</th>
                         <th className="p-2 border-x">طلاب</th>
                         <th className="p-2 border-x">رضع</th>
-                        <th className="p-2 border-x">مرأة معيلة</th>
                       </React.Fragment>
                     ))}
                     <th className="p-2">هيئة</th>
                     <th className="p-2">طلاب</th>
                     <th className="p-2">رضع</th>
-                    <th className="p-2">مرأة معيلة</th>
                     <th className="p-2 bg-emerald-100/30">الكل</th>
                   </tr>
                 </thead>
@@ -1128,9 +1116,6 @@ const TicketsReportPage = () => {
                     <td className="p-4 text-center font-black text-amber-600 bg-amber-50/10">
                       {getProcessedData(true).allData.reduce((s, r) => s + (parseInt(r.total_رضع) || 0), 0)}
                     </td>
-                    <td className="p-4 text-center font-black text-fuchsia-600 bg-fuchsia-50/10">
-                      {getProcessedData(true).allData.reduce((s, r) => s + (parseInt(r['total_المرأة المعيلة']) || 0), 0)}
-                    </td>
                     <td className="p-4 text-center bg-[var(--color-primary)]/10 font-black text-[var(--color-primary)]">
                       {getProcessedData(true).allData.reduce((s, r) => s + (parseInt(r.total) || 0), 0)}
                     </td>
@@ -1153,6 +1138,7 @@ const TicketsReportPage = () => {
           <PrintableTable
             title="تقرير التذاكر الطبية - العيادات المدعومة"
             subtitle={`شهر ${hierarchy.dispenseMonth}${periodFilter !== 'all' ? ` (${periodFilter})` : ''}`}
+            hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}
             showSignatures={false}
           >
           <div className="only-print mt-8">
@@ -1161,11 +1147,11 @@ const TicketsReportPage = () => {
               <thead className="bg-slate-100">
                 <tr className="border border-slate-300">
                   <th className="p-2 border border-slate-300" rowSpan={2}>العيادة</th>
-                  <th className="p-2 border border-slate-300 text-center" colSpan={4}>الأول</th>
-                  <th className="p-2 border border-slate-300 text-center" colSpan={4}>الثاني</th>
-                  <th className="p-2 border border-slate-300 text-center" colSpan={4}>الثالث</th>
-                  <th className="p-2 border border-slate-300 text-center" colSpan={4}>الرابع</th>
-                  <th className="p-2 border border-slate-300 text-center" colSpan={5}>الإجمالي</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={3}>الأول</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={3}>الثاني</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={3}>الثالث</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={3}>الرابع</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={4}>الإجمالي</th>
                 </tr>
                 <tr className="border border-slate-300">
                   {[1,2,3,4].map(w => categories.map(c => <th key={`${w}${c}`} className="p-1 border border-slate-300">{c}</th>))}
@@ -1182,13 +1168,11 @@ const TicketsReportPage = () => {
                         <td className="p-1 border border-slate-300 text-center">{row[`w${w}_هيئة`]}</td>
                         <td className="p-1 border border-slate-300 text-center">{row[`w${w}_طلاب`]}</td>
                         <td className="p-1 border border-slate-300 text-center">{row[`w${w}_رضع`]}</td>
-                        <td className="p-1 border border-slate-300 text-center">{row[`w${w}_المرأة المعيلة`]}</td>
                       </React.Fragment>
                     ))}
                     <td className="p-1 border border-slate-300 text-center font-bold bg-slate-50">{row.total_هيئة}</td>
                     <td className="p-1 border border-slate-300 text-center font-bold bg-slate-50">{row.total_طلاب}</td>
                     <td className="p-1 border border-slate-300 text-center font-bold bg-slate-50">{row.total_رضع}</td>
-                    <td className="p-1 border border-slate-300 text-center font-bold bg-slate-50">{row['total_المرأة المعيلة']}</td>
                     <td className="p-1 border border-slate-300 text-center font-bold bg-slate-200">{row.total}</td>
                   </tr>
                 ))}

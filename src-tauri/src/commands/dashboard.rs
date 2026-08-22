@@ -6,9 +6,59 @@ use serde::{Deserialize, Serialize};
 pub struct DashboardSummary {
     pub total_dispensed: f64,
     pub active_clinics: i32,
+    /// Which hierarchy level the active-clinics figure actually counts
+    /// ('clinic' | 'area' | 'branch').
+    pub active_clinics_level: String,
     pub tickets_count: i32,
     pub judicial_count: i32,
     pub authority_cost: f64,
+    /// True when the authority-cost source table (monthly_drugs_dispensed)
+    /// holds rows for the selected scope — lets the UI show N/A vs a real 0.
+    pub has_authority_data: bool,
+}
+
+/// Count active dispensing entities for the month, at the level the data was
+/// actually entered at (triple-isolation rule): clinics take priority, then
+/// areas, then branches. Counts DISTINCT entities across all dispensed tables
+/// so the same unit entered in two tables is counted once.
+fn count_active_entities(
+    conn: &rusqlite::Connection,
+    branch_id: Option<i32>,
+    dispense_month: &str,
+) -> (i32, &'static str) {
+    let branch_filter = if branch_id.is_some() { " AND branch_id = ?2" } else { "" };
+
+    let base = format!(
+        "SELECT clinic_id, area_id, branch_id FROM detailed_drug_dispensed WHERE dispense_month = ?1{}
+         UNION SELECT clinic_id, area_id, branch_id FROM insulin_dispensed WHERE dispense_month = ?1{}
+         UNION SELECT clinic_id, area_id, branch_id FROM medical_tickets WHERE dispense_month = ?1{}
+         UNION SELECT clinic_id, area_id, branch_id FROM judicial_dispensed WHERE dispense_month = ?1{}
+         UNION SELECT clinic_id, area_id, branch_id FROM monthly_supplies_dispensed WHERE dispense_month = ?1{}
+         UNION SELECT clinic_id, area_id, branch_id FROM monthly_drugs_dispensed WHERE dispense_month = ?1{}
+         UNION SELECT clinic_id, area_id, branch_id FROM drug_groups WHERE dispense_month = ?1{}",
+        branch_filter, branch_filter, branch_filter, branch_filter, branch_filter, branch_filter, branch_filter,
+    );
+
+    let count_sql = |cond: &str| -> i32 {
+        let sql = format!("SELECT COUNT(*) FROM ({}) WHERE {}", base, cond);
+        let params: Vec<Box<dyn rusqlite::ToSql>> = match branch_id {
+            Some(bid) => vec![Box::new(dispense_month.to_string()), Box::new(bid)],
+            None => vec![Box::new(dispense_month.to_string())],
+        };
+        let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+        conn.query_row(&sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0)
+    };
+
+    let by_clinic = count_sql("clinic_id IS NOT NULL");
+    if by_clinic > 0 {
+        return (by_clinic, "clinic");
+    }
+    let by_area = count_sql("clinic_id IS NULL AND area_id IS NOT NULL");
+    if by_area > 0 {
+        return (by_area, "area");
+    }
+    let by_branch = count_sql("clinic_id IS NULL AND area_id IS NULL");
+    (by_branch, "branch")
 }
 
 #[tauri::command]
@@ -31,49 +81,19 @@ pub fn get_dashboard_summary(
 
     let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
 
-    // 1. Total Dispensed = Drugs + Insulin
+    // 1. Total Dispensed = detailed drugs only (user-confirmed business rule).
     let drug_sql = format!("SELECT SUM(total_cost) FROM detailed_drug_dispensed {}", where_clause);
-    let drug_cost: f64 = conn.query_row(&drug_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0.0);
+    let total_dispensed: f64 = conn.query_row(&drug_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0.0);
 
-    let ins_sql = format!("SELECT SUM(cost) FROM insulin_dispensed {}", where_clause);
-    let ins_cost: f64 = conn.query_row(&ins_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0.0);
-    
-    let total_dispensed = drug_cost + ins_cost;
+    // 2. Active entities (clinics → areas → branches) by data entry level.
+    let (active_clinics, active_clinics_level) = count_active_entities(&conn, branchId, &dispenseMonth);
 
-    // 2. Active Clinics
-    let mut clinics_sql = "
-        SELECT COUNT(DISTINCT clinic_id) FROM (
-            SELECT clinic_id FROM detailed_drug_dispensed WHERE dispense_month = ?1
-            UNION
-            SELECT clinic_id FROM insulin_dispensed WHERE dispense_month = ?1
-            UNION
-            SELECT clinic_id FROM medical_tickets WHERE dispense_month = ?1
-            UNION
-            SELECT clinic_id FROM judicial_dispensed WHERE dispense_month = ?1
-        )
-    ".to_string();
-
-    if branchId.is_some() {
-        clinics_sql = "
-            SELECT COUNT(DISTINCT clinic_id) FROM (
-                SELECT clinic_id FROM detailed_drug_dispensed WHERE dispense_month = ?1 AND clinic_id IN (SELECT c.id FROM clinics c JOIN areas a ON c.area_id = a.id WHERE a.branch_id = ?2)
-                UNION
-                SELECT clinic_id FROM insulin_dispensed WHERE dispense_month = ?1 AND clinic_id IN (SELECT c.id FROM clinics c JOIN areas a ON c.area_id = a.id WHERE a.branch_id = ?2)
-                UNION
-                SELECT clinic_id FROM medical_tickets WHERE dispense_month = ?1 AND clinic_id IN (SELECT c.id FROM clinics c JOIN areas a ON c.area_id = a.id WHERE a.branch_id = ?2)
-                UNION
-                SELECT clinic_id FROM judicial_dispensed WHERE dispense_month = ?1 AND clinic_id IN (SELECT c.id FROM clinics c JOIN areas a ON c.area_id = a.id WHERE a.branch_id = ?2)
-            )
-        ".to_string();
-    }
-
-    let active_clinics: i32 = conn.query_row(&clinics_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0);
-
-    // 3. Tickets
+    // 3. Tickets (branch level filters on branch_id directly, NOT clinic
+    //    membership — branch-level records legitimately have clinic_id NULL).
     let mut t_where_clause = "WHERE dispense_month = ?1".to_string();
     let mut t_params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(dispenseMonth.clone())];
     if let Some(bid) = branchId {
-        t_where_clause.push_str(" AND clinic_id IN (SELECT c.id FROM clinics c JOIN areas a ON c.area_id = a.id WHERE a.branch_id = ?2)");
+        t_where_clause.push_str(" AND branch_id = ?2");
         t_params.push(Box::new(bid));
     }
     let t_params_ref: Vec<&dyn rusqlite::ToSql> = t_params.iter().map(|b| b.as_ref()).collect();
@@ -85,9 +105,15 @@ pub fn get_dashboard_summary(
     let jud_sql = format!("SELECT COUNT(*) FROM judicial_dispensed {}", where_clause);
     let judicial_count: i32 = conn.query_row(&jud_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0);
 
-    // 5. Authority Cost (Free + Supported)
+    // 5. Authority Cost (Free authority + Supported authority value) — real
+    //    source is monthly_drugs_dispensed; flag when it holds no rows so the
+    //    UI can show "غير متاح" instead of a misleading 0.
+    let auth_exists_sql = format!("SELECT COUNT(*) FROM monthly_drugs_dispensed {}", where_clause);
+    let auth_rows: i32 = conn.query_row(&auth_exists_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0);
+    let has_authority_data = auth_rows > 0;
+
     let auth_sql = format!(
-        "SELECT SUM(drugs_free_authority + drugs_supported_authority_value) FROM monthly_drugs_dispensed {}", 
+        "SELECT SUM(COALESCE(drugs_free_authority,0) + COALESCE(drugs_supported_authority_value,0)) FROM monthly_drugs_dispensed {}", 
         where_clause
     );
     let authority_cost: f64 = conn.query_row(&auth_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0.0);
@@ -95,9 +121,11 @@ pub fn get_dashboard_summary(
     Ok(DashboardSummary {
         total_dispensed,
         active_clinics,
+        active_clinics_level: active_clinics_level.to_string(),
         tickets_count,
         judicial_count,
         authority_cost,
+        has_authority_data,
     })
 }
 
@@ -105,6 +133,8 @@ pub fn get_dashboard_summary(
 pub struct TrendData {
     pub name: String,
     pub spending: f64,
+    pub cases: f64,
+    pub tickets: f64,
 }
 
 #[tauri::command]
@@ -137,14 +167,27 @@ pub fn get_dashboard_trend(
 
         let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
 
-        // Drugs + Insulin
+        // Spending = detailed drugs only (matches the total_dispensed card).
         let drug_sql = format!("SELECT SUM(total_cost) FROM detailed_drug_dispensed {}", where_clause);
         let drug_cost: f64 = conn.query_row(&drug_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0.0);
 
-        let ins_sql = format!("SELECT SUM(cost) FROM insulin_dispensed {}", where_clause);
-        let ins_cost: f64 = conn.query_row(&ins_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0.0);
+        // Cases = detailed dispensing cases (cases_count column).
+        let cases_sql = format!("SELECT SUM(COALESCE(cases_count,0)) FROM detailed_drug_dispensed {}", where_clause);
+        let cases: f64 = conn.query_row(&cases_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0.0);
 
-        let spending = drug_cost + ins_cost;
+        // Tickets = medical tickets (56ب + 56ج), filtered at the branch level
+        // directly so branch-level rows (clinic_id NULL) are not dropped.
+        let mut t_where_clause = "WHERE dispense_month = ?1".to_string();
+        let mut t_params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(month.clone())];
+        if let Some(bid) = branchId {
+            t_where_clause.push_str(" AND branch_id = ?2");
+            t_params.push(Box::new(bid));
+        }
+        let t_params_ref: Vec<&dyn rusqlite::ToSql> = t_params.iter().map(|b| b.as_ref()).collect();
+        let tickets_sql = format!("SELECT SUM(COALESCE(tickets_56b,0) + COALESCE(tickets_56c,0)) FROM medical_tickets {}", t_where_clause);
+        let tickets: f64 = conn.query_row(&tickets_sql, t_params_ref.as_slice(), |row| row.get(0)).unwrap_or(0.0);
+
+        let spending = drug_cost;
 
         // Parse month number to get Arabic name
         let month_name = if month.len() >= 7 {
@@ -161,6 +204,8 @@ pub fn get_dashboard_trend(
         result.push(TrendData {
             name: month_name,
             spending,
+            cases,
+            tickets,
         });
     }
 
@@ -187,22 +232,17 @@ fn calc_ytd_for_year(
     start: &str,
     end: &str,
 ) -> f64 {
+    // YTD mirrors the "إجمالي المنصرف" definition: detailed drugs only.
     let sql = if branch_id.is_some() {
-        "SELECT COALESCE((SELECT SUM(total_cost) FROM detailed_drug_dispensed WHERE dispense_month BETWEEN ?1 AND ?2 AND branch_id = ?3), 0) +
-                COALESCE((SELECT SUM(cost) FROM insulin_dispensed WHERE dispense_month BETWEEN ?1 AND ?2 AND branch_id = ?3), 0) +
-                COALESCE((SELECT SUM(monthly_cost) FROM judicial_dispensed WHERE dispense_month BETWEEN ?1 AND ?2 AND branch_id = ?3), 0) +
-                COALESCE((SELECT SUM(COALESCE(consumer_value,0)+COALESCE(collective_entities_value,0)) FROM monthly_supplies_dispensed WHERE dispense_month BETWEEN ?1 AND ?2 AND branch_id = ?3), 0)"
+        "SELECT COALESCE((SELECT SUM(total_cost) FROM detailed_drug_dispensed WHERE dispense_month BETWEEN ?1 AND ?2 AND branch_id = ?3), 0)"
     } else {
-        "SELECT COALESCE((SELECT SUM(total_cost) FROM detailed_drug_dispensed WHERE dispense_month BETWEEN ?1 AND ?2), 0) +
-                COALESCE((SELECT SUM(cost) FROM insulin_dispensed WHERE dispense_month BETWEEN ?1 AND ?2), 0) +
-                COALESCE((SELECT SUM(monthly_cost) FROM judicial_dispensed WHERE dispense_month BETWEEN ?1 AND ?2), 0) +
-                COALESCE((SELECT SUM(COALESCE(consumer_value,0)+COALESCE(collective_entities_value,0)) FROM monthly_supplies_dispensed WHERE dispense_month BETWEEN ?1 AND ?2), 0)"
+        "SELECT COALESCE((SELECT SUM(total_cost) FROM detailed_drug_dispensed WHERE dispense_month BETWEEN ?1 AND ?2), 0)"
     };
 
     if let Some(bid) = branch_id {
-        conn.query_row(sql, rusqlite::params![start, end, bid, start, end, bid, start, end, bid, start, end, bid], |row| row.get(0)).unwrap_or(0.0)
+        conn.query_row(sql, rusqlite::params![start, end, bid], |row| row.get(0)).unwrap_or(0.0)
     } else {
-        conn.query_row(sql, rusqlite::params![start, end, start, end, start, end, start, end], |row| row.get(0)).unwrap_or(0.0)
+        conn.query_row(sql, rusqlite::params![start, end], |row| row.get(0)).unwrap_or(0.0)
     }
 }
 
@@ -282,6 +322,10 @@ pub fn get_missing_months(
                     SELECT COUNT(*) > 0 FROM judicial_dispensed WHERE dispense_month = ?1 AND branch_id = ?2
                  ) OR (
                     SELECT COUNT(*) > 0 FROM medical_tickets WHERE dispense_month = ?1 AND branch_id = ?2
+                 ) OR (
+                    SELECT COUNT(*) > 0 FROM monthly_supplies_dispensed WHERE dispense_month = ?1 AND branch_id = ?2
+                 ) OR (
+                    SELECT COUNT(*) > 0 FROM drug_groups WHERE dispense_month = ?1 AND branch_id = ?2
                  )",
                  vec![Box::new(month.clone()), Box::new(bid)])
             } else {
@@ -295,6 +339,10 @@ pub fn get_missing_months(
                     SELECT COUNT(*) > 0 FROM judicial_dispensed WHERE dispense_month = ?1
                  ) OR (
                     SELECT COUNT(*) > 0 FROM medical_tickets WHERE dispense_month = ?1
+                 ) OR (
+                    SELECT COUNT(*) > 0 FROM monthly_supplies_dispensed WHERE dispense_month = ?1
+                 ) OR (
+                    SELECT COUNT(*) > 0 FROM drug_groups WHERE dispense_month = ?1
                  )",
                  vec![Box::new(month.clone())])
             };
@@ -344,35 +392,21 @@ pub fn get_recent_activity(
 
 #[tauri::command]
 pub fn get_latest_dispense_month(state: State<'_, AppState>) -> Result<String, String> {
-    let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
-    let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
-
-    let sql = "
-        SELECT MAX(m) FROM (
-            SELECT MAX(dispense_month) as m FROM monthly_drugs_dispensed
-            UNION ALL
-            SELECT MAX(dispense_month) as m FROM insulin_dispensed
-        )
-    ";
-
-    let latest: Option<String> = conn.query_row(sql, [], |row| row.get(0)).unwrap_or(None);
-
-    if let Some(month) = latest {
-        if !month.is_empty() {
-            return Ok(month);
-        }
-    }
-
-    // Fallback to previous month if no data exists
+    // Business rule: the dashboard MUST open on the PREVIOUS CALENDAR MONTH
+    // (current month - 1), because the current month is still in progress and
+    // its data is incomplete. The default is NEVER "the latest month that
+    // contains data" — that would create a mixed-month dashboard.
+    let _ = state;
     let now = chrono::Local::now();
-    let mut year = now.format("%Y").to_string().parse::<i32>().unwrap();
-    let mut month = now.format("%m").to_string().parse::<i32>().unwrap();
-    
+    use chrono::Datelike;
+    let mut year = now.format("%Y").to_string().parse::<i32>().unwrap_or_else(|_| now.year());
+    let mut month = now.format("%m").to_string().parse::<i32>().unwrap_or_else(|_| now.month() as i32);
+
     month -= 1;
     if month == 0 {
         month = 12;
         year -= 1;
     }
-    
+
     Ok(format!("{:04}-{:02}", year, month))
 }

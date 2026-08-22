@@ -8,7 +8,8 @@ pub struct ScheduledReport {
     pub name: String,
     pub report_type: String,       // 'analytical', 'financial', 'executive', 'drugs'
     pub schedule_type: String,     // 'monthly', 'quarterly', 'yearly'
-    pub day_of_month: i32,         // 1-28, or 0 for last day
+    pub day_from: i32,             // first day of the period (1-28)
+    pub day_to: i32,               // last day of the period (1-28, or 0 = last day)
     pub output_folder: String,     // saved folder path
     pub branch_id: Option<i64>,
     pub area_id: Option<i64>,
@@ -42,16 +43,17 @@ fn row_to_schedule(row: &rusqlite::Row) -> Result<ScheduledReport, rusqlite::Err
         name: row.get(1)?,
         report_type: row.get(2)?,
         schedule_type: row.get(3)?,
-        day_of_month: row.get(4)?,
-        output_folder: row.get(5)?,
-        branch_id: row.get(6)?,
-        area_id: row.get(7)?,
-        clinic_id: row.get(8)?,
-        is_active: row.get(9)?,
-        last_generated: row.get(10)?,
-        next_run: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        day_from: row.get(4)?,
+        day_to: row.get(5)?,
+        output_folder: row.get(6)?,
+        branch_id: row.get(7)?,
+        area_id: row.get(8)?,
+        clinic_id: row.get(9)?,
+        is_active: row.get(10)?,
+        last_generated: row.get(11)?,
+        next_run: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -69,21 +71,21 @@ fn row_to_history(row: &rusqlite::Row) -> Result<ReportHistory, rusqlite::Error>
 }
 
 /// Calculate next run date based on schedule config
-fn calc_next_run(schedule_type: &str, day_of_month: i32) -> String {
+fn calc_next_run(schedule_type: &str, day_to: i32) -> String {
     let today = Local::now().naive_local().date();
     let current_day = today.day() as i32;
     let current_month = today.month();
     let current_year = today.year();
 
-    // Determine target day
-    let target_day = if day_of_month <= 0 {
+    // Determine target day (use the LAST day of the configured range)
+    let target_day = if day_to <= 0 {
         // Last day of month
         let next_month = if current_month == 12 { 1 } else { current_month + 1 };
         let next_year = if current_month == 12 { current_year + 1 } else { current_year };
         let last_day = num_days_in_month(next_year, next_month);
         last_day
     } else {
-        day_of_month.min(28)
+        day_to.min(31)
     };
 
     // If target day already passed this month, schedule for next cycle
@@ -138,7 +140,7 @@ pub async fn get_scheduled_reports(
 
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, report_type, schedule_type, day_of_month,
+            "SELECT id, name, report_type, schedule_type, day_from, day_to,
                     output_folder, branch_id, area_id, clinic_id,
                     is_active, last_generated, next_run, created_at, updated_at
              FROM scheduled_reports
@@ -162,7 +164,8 @@ pub async fn save_scheduled_report(
     name: String,
     report_type: String,
     schedule_type: String,
-    day_of_month: i32,
+    day_from: i32,
+    day_to: i32,
     output_folder: String,
     branch_id: Option<i64>,
     area_id: Option<i64>,
@@ -174,7 +177,7 @@ pub async fn save_scheduled_report(
 
     let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let next_run = if is_active {
-        calc_next_run(&schedule_type, day_of_month)
+        calc_next_run(&schedule_type, day_to)
     } else {
         String::new()
     };
@@ -184,13 +187,13 @@ pub async fn save_scheduled_report(
         conn.execute(
             "UPDATE scheduled_reports SET
                 name = ?1, report_type = ?2, schedule_type = ?3,
-                day_of_month = ?4, output_folder = ?5,
-                branch_id = ?6, area_id = ?7, clinic_id = ?8,
-                is_active = ?9, next_run = ?10, updated_at = ?11
-             WHERE id = ?12",
+                day_from = ?4, day_to = ?5, output_folder = ?6,
+                branch_id = ?7, area_id = ?8, clinic_id = ?9,
+                is_active = ?10, next_run = ?11, updated_at = ?12
+             WHERE id = ?13",
             rusqlite::params![
                 name, report_type, schedule_type,
-                day_of_month, output_folder,
+                day_from, day_to, output_folder,
                 branch_id, area_id, clinic_id,
                 is_active, next_run, now, existing_id
             ],
@@ -200,7 +203,7 @@ pub async fn save_scheduled_report(
         // Fetch updated
         let report = conn
             .query_row(
-                "SELECT id, name, report_type, schedule_type, day_of_month,
+                "SELECT id, name, report_type, schedule_type, day_from, day_to,
                         output_folder, branch_id, area_id, clinic_id,
                         is_active, last_generated, next_run, created_at, updated_at
                  FROM scheduled_reports WHERE id = ?1",
@@ -213,11 +216,11 @@ pub async fn save_scheduled_report(
         // INSERT new
         conn.execute(
             "INSERT INTO scheduled_reports
-                (name, report_type, schedule_type, day_of_month, output_folder,
+                (name, report_type, schedule_type, day_from, day_to, output_folder,
                  branch_id, area_id, clinic_id, is_active, next_run, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
             rusqlite::params![
-                name, report_type, schedule_type, day_of_month, output_folder,
+                name, report_type, schedule_type, day_from, day_to, output_folder,
                 branch_id, area_id, clinic_id, is_active, next_run, now
             ],
         )
@@ -226,7 +229,7 @@ pub async fn save_scheduled_report(
         let new_id = conn.last_insert_rowid();
         let report = conn
             .query_row(
-                "SELECT id, name, report_type, schedule_type, day_of_month,
+                "SELECT id, name, report_type, schedule_type, day_from, day_to,
                         output_folder, branch_id, area_id, clinic_id,
                         is_active, last_generated, next_run, created_at, updated_at
                  FROM scheduled_reports WHERE id = ?1",
@@ -268,7 +271,7 @@ pub async fn toggle_scheduled_report(
         // Recalculate next run
         let report: ScheduledReport = conn
             .query_row(
-                "SELECT id, name, report_type, schedule_type, day_of_month,
+                "SELECT id, name, report_type, schedule_type, day_from, day_to,
                         output_folder, branch_id, area_id, clinic_id,
                         is_active, last_generated, next_run, created_at, updated_at
                  FROM scheduled_reports WHERE id = ?1",
@@ -276,7 +279,7 @@ pub async fn toggle_scheduled_report(
                 row_to_schedule,
             )
             .map_err(|e| e.to_string())?;
-        calc_next_run(&report.schedule_type, report.day_of_month)
+        calc_next_run(&report.schedule_type, report.day_to)
     } else {
         String::new()
     };
@@ -289,7 +292,7 @@ pub async fn toggle_scheduled_report(
 
     let report = conn
         .query_row(
-            "SELECT id, name, report_type, schedule_type, day_of_month,
+            "SELECT id, name, report_type, schedule_type, day_from, day_to,
                     output_folder, branch_id, area_id, clinic_id,
                     is_active, last_generated, next_run, created_at, updated_at
              FROM scheduled_reports WHERE id = ?1",
@@ -304,26 +307,197 @@ pub async fn toggle_scheduled_report(
 // REPORT EXECUTION
 // ═════════════════════════════════════════════════════════════════════
 
-#[derive(serde::Serialize)]
-pub struct GenerateResult {
-    pub file_path: String,
-    pub file_size: f64,
-    pub success: bool,
-    pub message: String,
+/// One comparison row: the same metric in the current period vs the
+/// previous period (month / quarter / year) plus the change percentage.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ComparisonRow {
+    pub label: String,
+    pub current: String,
+    pub previous: String,
+    pub change_pct: String,
 }
 
+/// Data returned to the frontend so it can generate the PDF with the app's
+/// Arabic-aware PDF engine (embedded Amiri font) and write it to disk.
+#[derive(serde::Serialize)]
+pub struct ScheduledReportRunData {
+    pub history_id: i64,
+    pub schedule: ScheduledReport,
+    pub title: String,
+    pub month: String,
+    pub timestamp: String,
+    pub branch_name: String,
+    pub area_name: String,
+    pub clinic_name: String,
+    pub rows: Vec<(String, String)>,
+    /// Current vs previous period comparison (may be empty for static reports).
+    pub comparison: Vec<ComparisonRow>,
+    pub filename_base: String,
+    /// Resolved output folder — falls back to Documents/DrugStats/Reports
+    /// when the schedule has no folder configured.
+    pub output_folder: String,
+}
+
+/// Default output folder for scheduled reports when none is configured:
+/// <USERPROFILE>\Documents\DrugStats\Reports
+fn default_output_folder() -> String {
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        format!("{}\\Documents\\DrugStats\\Reports", profile)
+    } else {
+        "DrugStats_Reports".to_string()
+    }
+}
+
+/// Build a WHERE-clause suffix that filters by the schedule's hierarchy
+/// (branch / area / clinic) when configured. Returns "" when unfiltered.
+fn hierarchy_filter(report: &ScheduledReport) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(b) = report.branch_id { parts.push(format!("branch_id = {}", b)); }
+    if let Some(a) = report.area_id { parts.push(format!("area_id = {}", a)); }
+    if let Some(c) = report.clinic_id { parts.push(format!("clinic_id = {}", c)); }
+    if parts.is_empty() { String::new() } else { format!(" AND {}", parts.join(" AND ")) }
+}
+
+/// Compute the (start_month, end_month) of the period immediately BEFORE
+/// the given range, for comparison purposes. Mirrors report_period logic:
+/// - monthly   → previous calendar month
+/// - quarterly → the quarter before the one containing `start`
+/// - yearly    → the previous year
+fn previous_period(schedule_type: &str, start: &str) -> (String, String) {
+    let parts: Vec<&str> = start.split('-').collect();
+    let y: i32 = parts
+        .first()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| Local::now().year());
+    let m: u32 = parts
+        .get(1)
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(12);
+
+    match schedule_type {
+        "quarterly" => {
+            let q_start = ((m - 1) / 3) * 3 + 1;
+            if q_start == 1 {
+                (format!("{:04}-10", y - 1), format!("{:04}-12", y - 1))
+            } else {
+                (format!("{:04}-{:02}", y, q_start - 3), format!("{:04}-{:02}", y, q_start - 1))
+            }
+        }
+        "yearly" => (format!("{:04}-01", y - 1), format!("{:04}-12", y - 1)),
+        _ => {
+            if m == 1 {
+                (format!("{:04}-12", y - 1), format!("{:04}-12", y - 1))
+            } else {
+                (format!("{:04}-{:02}", y, m - 1), format!("{:04}-{:02}", y, m - 1))
+            }
+        }
+    }
+}
+
+/// Run a SUM/COUNT aggregation over a period range with the hierarchy filter.
+/// Returns the numeric total (0 when no rows or the query fails).
+fn period_total(
+    conn: &rusqlite::Connection,
+    select_expr: &str,
+    table: &str,
+    filter: &str,
+    start: &str,
+    end: &str,
+) -> f64 {
+    let sql = format!(
+        "SELECT {} FROM {} WHERE dispense_month BETWEEN ?1 AND ?2{}",
+        select_expr, table, filter
+    );
+    conn.query_row(&sql, rusqlite::params![start, end], |row| row.get(0))
+        .unwrap_or(0.0)
+}
+
+/// Format a change percentage: "+12.3%" / "-5.0%" / "—" (both zero) / "جديد" (was zero).
+fn format_change(current: f64, previous: f64) -> String {
+    if previous.abs() < f64::EPSILON {
+        if current.abs() < f64::EPSILON {
+            "—".to_string()
+        } else {
+            "جديد".to_string()
+        }
+    } else {
+        format!("{:+.1}%", ((current - previous) / previous) * 100.0)
+    }
+}
+
+/// Build a comparison row from current/previous numeric totals.
+fn make_comparison(
+    label: &str,
+    current: f64,
+    previous: f64,
+    fmt: impl Fn(f64) -> String,
+) -> ComparisonRow {
+    ComparisonRow {
+        label: label.to_string(),
+        current: fmt(current),
+        previous: fmt(previous),
+        change_pct: format_change(current, previous),
+    }
+}
+
+/// Compute the (start_month, end_month, label) covered by a run based on
+/// the schedule's periodicity. `month` is an optional "YYYY-MM" reference
+/// month (defaults to the current month):
+/// - monthly  → that single month
+/// - quarterly → the 3-month quarter containing it
+/// - yearly   → all 12 months of its year
+fn report_period(schedule_type: &str, month: Option<String>) -> (String, String, String) {
+    let today = Local::now();
+    let year = today.year();
+    let mon = today.month();
+
+    let (y, m) = if let Some(m) = month {
+        let mut parts = m.split('-');
+        let py = parts.next().and_then(|p| p.parse::<i32>().ok()).unwrap_or(year);
+        let pm = parts.next().and_then(|p| p.parse::<u32>().ok()).unwrap_or(mon);
+        (py, pm.max(1).min(12))
+    } else {
+        (year, mon)
+    };
+
+    match schedule_type {
+        "quarterly" => {
+            let q_start = ((m - 1) / 3) * 3 + 1;
+            let q_end = q_start + 2;
+            let q_num = (m - 1) / 3 + 1;
+            (
+                format!("{:04}-{:02}", y, q_start),
+                format!("{:04}-{:02}", y, q_end),
+                format!("الربع {} من {}", q_num, y),
+            )
+        }
+        "yearly" => (
+            format!("{:04}-01", y),
+            format!("{:04}-12", y),
+            format!("سنة {}", y),
+        ),
+        _ => (format!("{:04}-{:02}", y, m), format!("{:04}-{:02}", y, m), format!("{:04}-{:02}", y, m)),
+    }
+}
+
+/// Start a scheduled report run. Creates a 'running' history entry and
+/// returns the aggregated summary data so the frontend can render the PDF
+/// with proper Arabic fonts and write it to the configured output folder.
 #[tauri::command]
 pub async fn run_scheduled_report_now(
     state: State<'_, AppState>,
     schedule_id: i64,
-) -> Result<GenerateResult, String> {
+    month: Option<String>,
+) -> Result<ScheduledReportRunData, String> {
     let (report, history_id) = {
         let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
         let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
         let report: ScheduledReport = conn
             .query_row(
-                "SELECT id, name, report_type, schedule_type, day_of_month,
+                "SELECT id, name, report_type, schedule_type, day_from, day_to,
                         output_folder, branch_id, area_id, clinic_id,
                         is_active, last_generated, next_run, created_at, updated_at
                  FROM scheduled_reports WHERE id = ?1",
@@ -343,217 +517,297 @@ pub async fn run_scheduled_report_now(
         .map_err(|e| e.to_string())?;
 
         let h_id = conn.last_insert_rowid();
-        drop(conn_guard);
         (report, h_id)
     };
 
-    // Generate report filename
+    // Generate report filename base (timestamped, sanitized)
     let now = Local::now();
     let date_str = now.format("%Y-%m-%d_%H%M%S").to_string();
     let safe_name = report.name.replace([' ', '/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-    let filename = format!("{}_{}.pdf", safe_name, date_str);
-    let file_path = std::path::Path::new(&report.output_folder).join(&filename);
+    let filename_base = format!("{}_{}", safe_name, date_str);
 
-    // Ensure output directory exists
-    if let Some(parent) = file_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("فشل إنشاء مجلد الإخراج: {}", e))?;
-    }
+    // Determine the period covered (monthly / quarter / year) using the
+    // schedule's periodicity and the optional reference month.
+    let (period_start, period_end, mut period_label) =
+        report_period(&report.schedule_type, month);
+    // Append the configured day range so the preview/paper confirms the
+    // exact period the report covers (e.g. "من يوم 1 إلى 7").
+    let day_to_label = if report.day_to <= 0 {
+        "آخر الشهر".to_string()
+    } else {
+        report.day_to.to_string()
+    };
+    period_label = format!(
+        "{} (من يوم {} إلى {})",
+        period_label,
+        report.day_from.max(1),
+        day_to_label
+    );
 
-    // Attempt generation
-    let result = generate_report_data(&state, &report).await;
-
-    match result {
-        Ok(pdf_bytes) => {
-            // Write PDF file
-            let file_size_kb = (pdf_bytes.len() as f64) / 1024.0;
-            std::fs::write(&file_path, &pdf_bytes)
-                .map_err(|e| format!("فشل كتابة ملف PDF: {}", e))?;
-
-            let file_path_str = file_path.to_string_lossy().to_string();
-            let now_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-            let next_run = calc_next_run(&report.schedule_type, report.day_of_month);
-
-            // Update history and schedule
-            let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
-            let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
-
-            conn.execute(
-                "UPDATE scheduled_report_history SET status = ?1, file_path = ?2, file_size = ?3 WHERE id = ?4",
-                rusqlite::params!["success", file_path_str, file_size_kb, history_id],
-            )
+    // Collect summary data (hierarchy-filtered). On any failure, mark the
+    // history entry as failed so it doesn't stay 'running' forever.
+    let collect_result = (|| -> Result<_, String> {
+        let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
+        let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+        let (title, rows, comparison) = collect_report_data(conn, &report, &period_start, &period_end, &period_label)
             .map_err(|e| e.to_string())?;
+        let (branch_name, area_name, clinic_name) = get_hierarchy_names(conn, &report)?;
+        Ok((title, rows, comparison, branch_name, area_name, clinic_name))
+    })();
 
-            conn.execute(
-                "UPDATE scheduled_reports SET last_generated = ?1, next_run = ?2, updated_at = ?3 WHERE id = ?4",
-                rusqlite::params![now_str, next_run, now_str, schedule_id],
-            )
-            .map_err(|e| e.to_string())?;
-
-            Ok(GenerateResult {
-                file_path: file_path_str,
-                file_size: file_size_kb,
-                success: true,
-                message: format!("✅ تم إنشاء التقرير بنجاح: {}", filename),
-            })
-        }
+    let (title, rows, comparison, branch_name, area_name, clinic_name) = match collect_result {
+        Ok(v) => v,
         Err(e) => {
-            // Update history with failure
-            let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
-            let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
-
-            conn.execute(
-                "UPDATE scheduled_report_history SET status = ?1, error_message = ?2 WHERE id = ?3",
-                rusqlite::params!["failed", e.to_string(), history_id],
-            )
-            .map_err(|e| e.to_string())?;
-
-            Ok(GenerateResult {
-                file_path: String::new(),
-                file_size: 0.0,
-                success: false,
-                message: format!("❌ فشل إنشاء التقرير: {}", e),
-            })
+            let conn_guard = state.db.lock().map_err(|e2| e2.to_string())?;
+            if let Some(conn) = conn_guard.as_ref() {
+                let _ = conn.execute(
+                    "UPDATE scheduled_report_history SET status = ?1, error_message = ?2 WHERE id = ?3",
+                    rusqlite::params!["failed", e.clone(), history_id],
+                );
+            }
+            return Err(e);
         }
-    }
+    };
+
+    let output_folder = if report.output_folder.trim().is_empty() {
+        default_output_folder()
+    } else {
+        report.output_folder.clone()
+    };
+
+    Ok(ScheduledReportRunData {
+        history_id,
+        schedule: report,
+        title,
+        month: period_label.clone(),
+        timestamp: now.format("%Y-%m-%d %H:%M").to_string(),
+        branch_name,
+        area_name,
+        clinic_name,
+        rows,
+        comparison,
+        filename_base,
+        output_folder,
+    })
 }
 
-/// Generate report data and return PDF bytes.
-/// This is a placeholder — actual data aggregation and PDF generation
-/// happens on the frontend. On the backend, we generate a summary PDF
-/// using the available report data from the database.
-async fn generate_report_data(
-    state: &State<'_, AppState>,
-    report: &ScheduledReport,
-) -> Result<Vec<u8>, String> {
+/// Mark a scheduled run as successful and advance last_generated / next_run.
+#[tauri::command]
+pub async fn complete_scheduled_report(
+    state: State<'_, AppState>,
+    schedule_id: i64,
+    history_id: i64,
+    file_path: String,
+    file_size_kb: f64,
+) -> Result<(), String> {
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
-    let (branch_name, area_name, clinic_name) = get_hierarchy_names(conn, report)?;
+    let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    conn.execute(
+        "UPDATE scheduled_report_history SET status = ?1, file_path = ?2, file_size = ?3 WHERE id = ?4",
+        rusqlite::params!["success", file_path, file_size_kb, history_id],
+    )
+    .map_err(|e| e.to_string())?;
 
-    // Build a simple text-based PDF summary using print-friendly content
-    // For full-blown PDF generation, the frontend should be used.
-    let now = Local::now().format("%Y-%m-%d %H:%M").to_string();
-    let month = Local::now().format("%Y-%m").to_string();
-    let year = Local::now().year();
-
-    // Collect summary data based on report type
-    let (title, table_rows) = match report.report_type.as_str() {
-        "analytical" => {
-            let drugs_total: f64 = conn
-                .query_row(
-                    "SELECT COALESCE(SUM(total_cost), 0) FROM detailed_drug_dispensed WHERE dispense_month = ?1",
-                    [&month],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0.0);
-
-            let insulin_total: f64 = conn
-                .query_row(
-                    "SELECT COALESCE(SUM(cost), 0) FROM insulin_dispensed WHERE dispense_month = ?1",
-                    [&month],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0.0);
-
-            let tickets_count: i64 = conn
-                .query_row(
-                    "SELECT COALESCE(SUM(tickets_56c + tickets_56b), 0) FROM medical_tickets WHERE dispense_month = ?1",
-                    [&month],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
-
-            (
-                format!("تقرير تحليلي - {}", month),
-                vec![
-                    format!("إجمالي صرف الأدوية: {:.2} جنيه", drugs_total),
-                    format!("إجمالي صرف الأنسولين: {:.2} جنيه", insulin_total),
-                    format!("إجمالي التذاكر الطبية: {}", tickets_count),
-                    format!("إجمالي التكلفة: {:.2} جنيه", drugs_total + insulin_total),
-                ],
+    let next_run = {
+        let report: ScheduledReport = conn
+            .query_row(
+                "SELECT id, name, report_type, schedule_type, day_from, day_to,
+                        output_folder, branch_id, area_id, clinic_id,
+                        is_active, last_generated, next_run, created_at, updated_at
+                 FROM scheduled_reports WHERE id = ?1",
+                [schedule_id],
+                row_to_schedule,
             )
+            .map_err(|e| e.to_string())?;
+        // Only advance next_run for active schedules (matches save/toggle)
+        if report.is_active {
+            calc_next_run(&report.schedule_type, report.day_to)
+        } else {
+            String::new()
         }
-        "financial" => {
-            let free_total: f64 = conn
-                .query_row(
-                    "SELECT COALESCE(SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women), 0)
-                     FROM monthly_drugs_dispensed WHERE dispense_month = ?1",
-                    [&month],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0.0);
-
-            let supported_total: f64 = conn
-                .query_row(
-                    "SELECT COALESCE(SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value), 0)
-                     FROM monthly_drugs_dispensed WHERE dispense_month = ?1",
-                    [&month],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0.0);
-
-            (
-                format!("تقرير مالي - {}", month),
-                vec![
-                    format!("الأدوية المجانية: {:.2} جنيه", free_total),
-                    format!("الأدوية المدعمة: {:.2} جنيه", supported_total),
-                    format!("الإجمالي: {:.2} جنيه", free_total + supported_total),
-                ],
-            )
-        }
-        "executive" => {
-            let drugs_count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM drugs", [], |row| row.get(0))
-                .unwrap_or(0);
-            let clinics_count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM clinics", [], |row| row.get(0))
-                .unwrap_or(0);
-            let users_count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
-                .unwrap_or(0);
-
-            (
-                format!("تقرير تنفيذي - {}", year),
-                vec![
-                    format!("عدد الأدوية المسجلة: {}", drugs_count),
-                    format!("عدد العيادات: {}", clinics_count),
-                    format!("عدد المستخدمين: {}", users_count),
-                ],
-            )
-        }
-        "drugs" => {
-            let dispensed_count: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM detailed_drug_dispensed WHERE dispense_month = ?1",
-                    [&month],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
-
-            let total_quantity: f64 = conn
-                .query_row(
-                    "SELECT COALESCE(SUM(quantity), 0) FROM detailed_drug_dispensed WHERE dispense_month = ?1",
-                    [&month],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0.0);
-
-            (
-                format!("تقرير الأدوية - {}", month),
-                vec![
-                    format!("عدد عمليات الصرف: {}", dispensed_count),
-                    format!("إجمالي الكميات: {:.2}", total_quantity),
-                ],
-            )
-        }
-        _ => (
-            format!("تقرير {}", report.name),
-            vec!["بيانات غير متوفرة".to_string()],
-        ),
     };
 
-    // Generate simple PDF using embedded text
-    generate_simple_pdf(&title, &report.name, &branch_name, &area_name, &clinic_name, &month, &now, &table_rows)
+    conn.execute(
+        "UPDATE scheduled_reports SET last_generated = ?1, next_run = ?2, updated_at = ?3 WHERE id = ?4",
+        rusqlite::params![now, next_run, now, schedule_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Mark a scheduled run as failed.
+#[tauri::command]
+pub async fn fail_scheduled_report(
+    state: State<'_, AppState>,
+    history_id: i64,
+    error_message: String,
+) -> Result<(), String> {
+    let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+
+    conn.execute(
+        "UPDATE scheduled_report_history SET status = ?1, error_message = ?2 WHERE id = ?3",
+        rusqlite::params!["failed", error_message, history_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Mark a scheduled run as cancelled by the user (previewed but not saved).
+/// Keeps the history row so the user can see the run happened but was
+/// deliberately abandoned — no file was produced.
+#[tauri::command]
+pub async fn cancel_scheduled_report(
+    state: State<'_, AppState>,
+    history_id: i64,
+) -> Result<(), String> {
+    let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+
+    conn.execute(
+        "UPDATE scheduled_report_history SET status = ?1, error_message = ?2 WHERE id = ?3",
+        rusqlite::params!["cancelled", "أُلغي بواسطة المستخدم قبل الحفظ", history_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Collect summary data for a report type. Returns
+/// (title, [(label, value)], [ComparisonRow]).
+/// Every aggregation query honors the schedule's branch/area/clinic filters
+/// AND restricts data to [period_start, period_end] (both "YYYY-MM").
+/// Comparison rows compare the current period vs the previous one.
+fn collect_report_data(
+    conn: &rusqlite::Connection,
+    report: &ScheduledReport,
+    period_start: &str,
+    period_end: &str,
+    period_label: &str,
+) -> Result<(String, Vec<(String, String)>, Vec<ComparisonRow>), String> {
+    let filter = hierarchy_filter(report);
+    let (prev_start, prev_end) = previous_period(&report.schedule_type, period_start);
+
+    let money = |v: f64| format!("{:.2} جنيه", v);
+    let count = |v: f64| format!("{}", v as i64);
+
+    let (rows, comparison): (Vec<(String, String)>, Vec<ComparisonRow>) =
+        match report.report_type.as_str() {
+            "analytical" => {
+                let cur_drugs = period_total(conn, "COALESCE(SUM(total_cost), 0)", "detailed_drug_dispensed", &filter, period_start, period_end);
+                let prev_drugs = period_total(conn, "COALESCE(SUM(total_cost), 0)", "detailed_drug_dispensed", &filter, &prev_start, &prev_end);
+                let cur_insulin = period_total(conn, "COALESCE(SUM(cost), 0)", "insulin_dispensed", &filter, period_start, period_end);
+                let prev_insulin = period_total(conn, "COALESCE(SUM(cost), 0)", "insulin_dispensed", &filter, &prev_start, &prev_end);
+                let cur_tickets = period_total(conn, "COALESCE(SUM(tickets_56c + tickets_56b), 0)", "medical_tickets", &filter, period_start, period_end);
+                let prev_tickets = period_total(conn, "COALESCE(SUM(tickets_56c + tickets_56b), 0)", "medical_tickets", &filter, &prev_start, &prev_end);
+
+                let rows = vec![
+                    ("إجمالي صرف الأدوية".to_string(), money(cur_drugs)),
+                    ("إجمالي صرف الأنسولين".to_string(), money(cur_insulin)),
+                    ("إجمالي التذاكر الطبية".to_string(), count(cur_tickets)),
+                    ("إجمالي التكلفة".to_string(), money(cur_drugs + cur_insulin)),
+                ];
+                let comparison = vec![
+                    make_comparison("إجمالي صرف الأدوية", cur_drugs, prev_drugs, &money),
+                    make_comparison("إجمالي صرف الأنسولين", cur_insulin, prev_insulin, &money),
+                    make_comparison("إجمالي التذاكر الطبية", cur_tickets, prev_tickets, &count),
+                    make_comparison("إجمالي التكلفة", cur_drugs + cur_insulin, prev_drugs + prev_insulin, &money),
+                ];
+                (rows, comparison)
+            }
+            "financial" => {
+                let cur_free = period_total(
+                    conn,
+                    "COALESCE(SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women), 0)",
+                    "monthly_drugs_dispensed",
+                    &filter,
+                    period_start,
+                    period_end,
+                );
+                let prev_free = period_total(
+                    conn,
+                    "COALESCE(SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women), 0)",
+                    "monthly_drugs_dispensed",
+                    &filter,
+                    &prev_start,
+                    &prev_end,
+                );
+                let cur_supported = period_total(
+                    conn,
+                    "COALESCE(SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value), 0)",
+                    "monthly_drugs_dispensed",
+                    &filter,
+                    period_start,
+                    period_end,
+                );
+                let prev_supported = period_total(
+                    conn,
+                    "COALESCE(SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value), 0)",
+                    "monthly_drugs_dispensed",
+                    &filter,
+                    &prev_start,
+                    &prev_end,
+                );
+
+                let rows = vec![
+                    ("الأدوية المجانية".to_string(), money(cur_free)),
+                    ("الأدوية المدعمة".to_string(), money(cur_supported)),
+                    ("الإجمالي".to_string(), money(cur_free + cur_supported)),
+                ];
+                let comparison = vec![
+                    make_comparison("الأدوية المجانية", cur_free, prev_free, &money),
+                    make_comparison("الأدوية المدعمة", cur_supported, prev_supported, &money),
+                    make_comparison("الإجمالي", cur_free + cur_supported, prev_free + prev_supported, &money),
+                ];
+                (rows, comparison)
+            }
+            "executive" => {
+                let drugs_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM drugs", [], |row| row.get(0))
+                    .map_err(|e| e.to_string())?;
+                let clinics_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM clinics", [], |row| row.get(0))
+                    .map_err(|e| e.to_string())?;
+                let users_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+                    .map_err(|e| e.to_string())?;
+
+                let rows = vec![
+                    ("عدد الأدوية المسجلة".to_string(), format!("{}", drugs_count)),
+                    ("عدد العيادات".to_string(), format!("{}", clinics_count)),
+                    ("عدد المستخدمين".to_string(), format!("{}", users_count)),
+                ];
+                // Static counts — no period comparison available.
+                (rows, Vec::new())
+            }
+            "drugs" => {
+                let cur_count = period_total(conn, "COUNT(*)", "detailed_drug_dispensed", &filter, period_start, period_end);
+                let prev_count = period_total(conn, "COUNT(*)", "detailed_drug_dispensed", &filter, &prev_start, &prev_end);
+                let cur_qty = period_total(conn, "COALESCE(SUM(quantity), 0)", "detailed_drug_dispensed", &filter, period_start, period_end);
+                let prev_qty = period_total(conn, "COALESCE(SUM(quantity), 0)", "detailed_drug_dispensed", &filter, &prev_start, &prev_end);
+
+                let rows = vec![
+                    ("عدد عمليات الصرف".to_string(), count(cur_count)),
+                    ("إجمالي الكميات".to_string(), format!("{:.2}", cur_qty)),
+                ];
+                let comparison = vec![
+                    make_comparison("عدد عمليات الصرف", cur_count, prev_count, &count),
+                    make_comparison("إجمالي الكميات", cur_qty, prev_qty, &|v| format!("{:.2}", v)),
+                ];
+                (rows, comparison)
+            }
+            _ => (vec![("بيانات غير متوفرة".to_string(), String::new())], Vec::new()),
+        };
+
+    // Title always leads with the report's OWN name so the preview/paper
+    // reflects the actual configured report — not a generic default label.
+    let title = format!("{} - {}", report.name, period_label);
+
+    Ok((title, rows, comparison))
 }
 
 fn get_hierarchy_names(conn: &rusqlite::Connection, report: &ScheduledReport) -> Result<(String, String, String), String> {
@@ -579,130 +833,6 @@ fn get_hierarchy_names(conn: &rusqlite::Connection, report: &ScheduledReport) ->
     };
 
     Ok((branch_name, area_name, clinic_name))
-}
-
-/// Generate a simple text-based PDF for scheduled reports.
-/// Tracks byte offsets correctly so the xref table is valid.
-fn generate_simple_pdf(
-    title: &str,
-    report_name: &str,
-    branch: &str,
-    area: &str,
-    clinic: &str,
-    month: &str,
-    timestamp: &str,
-    rows: &[String],
-) -> Result<Vec<u8>, String> {
-    let mut content = Vec::new();
-
-    // ── Helper: append bytes, return end offset ─────────────────────
-    fn write_obj(buf: &mut Vec<u8>, data: &[u8]) -> usize {
-        let start = buf.len();
-        buf.extend_from_slice(data);
-        start
-    }
-
-    // ── Object 0: dummy entry ───────────────────────────────────────
-    let _obj0: usize = 0; // always 0000000000
-
-    // ── Header ───────────────────────────────────────────────────────
-    let _hdr_end = write_obj(&mut content, b"%PDF-1.4\n"); // 9 bytes → offset 9
-
-    // ── Object 1: Catalog ────────────────────────────────────────────
-    // offset is the current end of content (= content.len() before writing)
-    let obj1_off = write_obj(&mut content, b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
-    // obj1_off = 9, correct.
-
-    // ── Object 2: Pages ──────────────────────────────────────────────
-    let obj2_off = write_obj(&mut content, b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
-
-    // ── Object 3: Page ───────────────────────────────────────────────
-    let obj3_off = write_obj(&mut content, b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>\nendobj\n");
-
-    // ── Build PDF text content ───────────────────────────────────────
-    let mut pdf_text = String::new();
-    pdf_text.push_str("الهيئة العامة للتأمين الصحي\n");
-    pdf_text.push_str("نظام إحصائيات الأدوية والمستلزمات الطبية\n");
-    pdf_text.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
-    pdf_text.push_str(&format!("تقرير مجدول تلقائياً\n\n"));
-    pdf_text.push_str(&format!("العنوان: {}\n", title));
-    pdf_text.push_str(&format!("التقرير: {}\n", report_name));
-    pdf_text.push_str(&format!("الشهر: {}\n", month));
-    pdf_text.push_str(&format!("تاريخ الإنشاء: {}\n\n", timestamp));
-    if !branch.is_empty() { pdf_text.push_str(&format!("الفرع: {}\n", branch)); }
-    if !area.is_empty() { pdf_text.push_str(&format!("المنطقة: {}\n", area)); }
-    if !clinic.is_empty() { pdf_text.push_str(&format!("العيادة: {}\n", clinic)); }
-    pdf_text.push_str("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
-    for (i, row) in rows.iter().enumerate() {
-        pdf_text.push_str(&format!("{}. {}\n", i + 1, row));
-    }
-    pdf_text.push_str("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    pdf_text.push_str(&format!("جميع الحقوق محفوظة © {}\n", Local::now().year()));
-    pdf_text.push_str("تصميم وإعداد وتطوير: ك/ أحمد علي أحمد كوكب\n\n");
-    pdf_text.push_str("── نهاية التقرير ──\n");
-
-    // ── Build stream operator content ────────────────────────────────
-    let mut stream_content = String::from("BT\n/F2 20 Tf\n50 560 Td\n(");
-    stream_content.push_str(&escape_pdf_string(title));
-    stream_content.push_str(") Tj\n/F1 10 Tf\n0 -25 Td\n");
-
-    for line in pdf_text.lines() {
-        stream_content.push_str(&format!(
-            "0 -14 Td\n({}) Tj\n",
-            escape_pdf_string(line)
-        ));
-    }
-    stream_content.push_str("ET\n");
-
-    let stream_bytes = stream_content.as_bytes();
-    let stream_len = stream_bytes.len();
-
-    // ── Object 4: Stream ─────────────────────────────────────────────
-    let obj4_off = content.len();
-    let header = format!("4 0 obj\n<< /Length {} >>\nstream\n", stream_len);
-    content.extend_from_slice(header.as_bytes());
-    content.extend_from_slice(stream_bytes);
-    content.extend_from_slice(b"\nendstream\nendobj\n");
-
-    // ── Object 5: Font Helvetica ─────────────────────────────────────
-    let obj5_off = content.len();
-    content.extend_from_slice(
-        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
-    );
-
-    // ── Object 6: Font Helvetica-Bold ────────────────────────────────
-    let obj6_off = content.len();
-    content.extend_from_slice(
-        b"6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n"
-    );
-
-    // ── XREF table with DYNAMIC offsets ──────────────────────────────
-    let xref_offset = content.len();
-    let xref = format!(
-        "xref\n0 7\n\
-         0000000000 65535 f \n\
-         {:010} 00000 n \n\
-         {:010} 00000 n \n\
-         {:010} 00000 n \n\
-         {:010} 00000 n \n\
-         {:010} 00000 n \n\
-         {:010} 00000 n \n\
-         trailer\n<< /Size 7 /Root 1 0 R >>\n\
-         startxref\n{}\n%%EOF\n",
-        obj1_off, obj2_off, obj3_off, obj4_off, obj5_off, obj6_off,
-        xref_offset
-    );
-
-    content.extend_from_slice(xref.as_bytes());
-    Ok(content)
-}
-
-fn escape_pdf_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('(', "\\(")
-        .replace(')', "\\)")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -753,7 +883,7 @@ pub async fn get_report_history(
 #[tauri::command]
 pub async fn check_due_reports(
     state: State<'_, AppState>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<ScheduledReport>, String> {
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
@@ -762,11 +892,11 @@ pub async fn check_due_reports(
     // Find active reports where next_run <= today
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, report_type, schedule_type, day_of_month,
+            "SELECT id, name, report_type, schedule_type, day_from, day_to,
                     output_folder, branch_id, area_id, clinic_id,
                     is_active, last_generated, next_run, created_at, updated_at
              FROM scheduled_reports
-             WHERE is_active = 1 AND next_run <= ?1
+             WHERE is_active = 1 AND next_run != '' AND next_run <= ?1
              ORDER BY next_run ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -777,7 +907,6 @@ pub async fn check_due_reports(
         .filter_map(|r| r.ok())
         .collect();
 
-    // Return names of due reports (actual execution happens on frontend)
-    let names: Vec<String> = due_reports.iter().map(|r| r.name.clone()).collect();
-    Ok(names)
+    // Return full due reports so the frontend can run each one automatically
+    Ok(due_reports)
 }

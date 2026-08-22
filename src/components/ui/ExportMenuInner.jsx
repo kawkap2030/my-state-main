@@ -4,7 +4,7 @@ import {
   Printer, ChevronDown, Download, X 
 } from 'lucide-react';
 // Import only what's needed — avoids bundling unused export libraries
-import { exportToExcel } from '../../utils/exportExcel';
+import { exportMultiSheetExcel } from '../../utils/exportExcel';
 import { exportToWord } from '../../utils/exportWord';
 import { exportToPDF } from '../../utils/exportPdf';
 import { useToast } from './Toast';
@@ -13,6 +13,7 @@ import { useAuth } from '../../context/AuthContext';
 import useReportSignatures from '../../hooks/useReportSignatures';
 import PrintPreviewModal from '../common/PrintPreviewModal';
 import ExportSettingsModal from '../common/ExportSettingsModal';
+import { buildHierarchyLabel } from '../../utils/reportUtils';
 
 /**
  * ExportMenuInner — Full export dropdown implementation.
@@ -21,7 +22,7 @@ import ExportSettingsModal from '../common/ExportSettingsModal';
  * libraries (exceljs, jspdf, html-to-image) are only fetched when
  * the user actually opens the export menu.
  */
-const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = false, onCustomExport = null }) => {
+const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = false, onCustomExport = null, chartImage = null }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [showPrintPreview, setShowPrintPreview] = useState(false);
   const [showExportSettings, setShowExportSettings] = useState(false);
@@ -29,27 +30,34 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
   const [exporting, setExporting] = useState(null);
   const menuRef = useRef(null);
   const toast = useToast();
-  const { workspaceMode, hierarchyNames } = useGlobalApp();
+  const { workspaceMode, hierarchyNames, activeHierarchy } = useGlobalApp();
   const { user } = useAuth();
   const { signatures } = useReportSignatures();
 
   const getDynamicHierarchyLabel = () => {
     if (options.hierarchyLabel) return options.hierarchyLabel;
-    
-    const parts = [];
-    if (hierarchyNames.branch) parts.push(`فرع: ${hierarchyNames.branch}`);
-    if (hierarchyNames.area && (workspaceMode === 'areas' || workspaceMode === 'clinics')) parts.push(`منطقة: ${hierarchyNames.area}`);
-    if (hierarchyNames.clinic && workspaceMode === 'clinics') parts.push(`عيادة: ${hierarchyNames.clinic}`);
-    return parts.join(' | ');
-  };  const buildDefaultSignatureData = () => ({
+    return buildHierarchyLabel(workspaceMode, hierarchyNames);
+  };
+
+  const buildDefaultSignatureData = () => ({
     preparerName: signatures?.preparerName || user?.username || '',
     managerName: signatures?.managerName || '',
     approvalNumber: signatures?.approvalNumber || '',
   });
 
+  // Report data month — taken from page-provided options first, then the
+  // globally-synced active hierarchy (HierarchySelector keeps it in sync).
+  // Skip the global fallback when the page's subtitle already carries the
+  // month/period (e.g. "شهر التقرير: 2026-06") to avoid header duplication.
+  const sub = options.subtitle || '';
+  const globalMonth = activeHierarchy?.dispenseMonth || '';
+  const subtitleHasMonth = /(شهر|الفترة)/.test(sub) || (!!globalMonth && (sub.includes(globalMonth) || /\d{4}-\d{2}/.test(sub)));
+  const monthLabel = options.month || options.dispenseMonth || (subtitleHasMonth ? '' : globalMonth);
+
   const finalOptions = {
     ...options,
     hierarchyLabel: getDynamicHierarchyLabel(),
+    monthLabel,
     signatures: buildDefaultSignatureData(),
   };
 
@@ -115,16 +123,105 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
       }
 
       switch (type) {
-        case 'excel':
-          await exportToExcel(data, columns, enhancedOptions);
+        case 'excel': {
+          // Use multi-sheet export as default — generates summary sheet + data sheet
+          // Auto-generate a comprehensive summary from the data
+          const summaryRows = [
+            ['إجمالي عدد السجلات', String(data.length)],
+          ];
+          
+          // Calculate total from all numeric columns
+          let totalSum = 0;
+          let foundNumeric = false;
+          if (data.length > 0 && columns.length > 0) {
+            columns.forEach((col) => {
+              // Try to find the 'total' or 'cost' related column first
+              const headerLower = (col.header || '').toLowerCase();
+              const accessorStr = String(col.accessor || '').toLowerCase();
+              const isTotalCol = headerLower.includes('total') || headerLower.includes('cost') || 
+                                 headerLower.includes('price') || headerLower.includes('value') ||
+                                 headerLower.includes('اجمالي') || headerLower.includes('إجمالي') ||
+                                 headerLower.includes('تكلفة') || headerLower.includes('سعر') ||
+                                 headerLower.includes('قيمة') ||
+                                 accessorStr.includes('total') || accessorStr.includes('cost');
+              
+              if (isTotalCol) {
+                const sum = data.reduce((acc, row) => {
+                  const val = typeof col.exportAccessor === 'function'
+                    ? col.exportAccessor(row)
+                    : row[col.accessor];
+                  const num = parseFloat(String(val || '0').replace(/,/g, ''));
+                  return acc + (isNaN(num) ? 0 : num);
+                }, 0);
+                if (sum > 0) {
+                  totalSum += sum;
+                  foundNumeric = true;
+                }
+              }
+            });
+            
+            // If no total column found, try the last numeric column
+            if (!foundNumeric) {
+              const lastCol = columns[columns.length - 1];
+              const sum = data.reduce((acc, row) => {
+                const val = typeof lastCol.exportAccessor === 'function'
+                  ? lastCol.exportAccessor(row)
+                  : row[lastCol.accessor];
+                const num = parseFloat(String(val || '0').replace(/,/g, ''));
+                return acc + (isNaN(num) ? 0 : num);
+              }, 0);
+              if (sum > 0) {
+                totalSum = sum;
+                foundNumeric = true;
+              }
+            }
+          }
+          
+          if (foundNumeric) {
+            summaryRows.push(['الإجمالي', totalSum.toLocaleString(undefined, { maximumFractionDigits: 2 })]);
+          }
+          if (enhancedOptions.subtitle) {
+            summaryRows.push(['الفترة', enhancedOptions.subtitle]);
+          }
+          if (enhancedOptions.monthLabel) {
+            summaryRows.push(['شهر البيانات', enhancedOptions.monthLabel]);
+          }
+          if (enhancedOptions.hierarchyLabel) {
+            summaryRows.push(['النطاق', enhancedOptions.hierarchyLabel]);
+          }
+
+          const sheetsData = {
+            'التقرير الرئيسي': {
+              data,
+              columns,
+              options: enhancedOptions,
+            },
+          };
+
+          await exportMultiSheetExcel(sheetsData, {
+            fileName: enhancedOptions.fileName || 'report',
+            title: enhancedOptions.title || 'تقرير',
+            chartImage: chartImage || enhancedOptions.chartImage || null,
+            summaryData: {
+              headers: ['الإحصائية', 'القيمة'],
+              rows: summaryRows,
+            },
+          });
           toast.success('تم تصدير ملف Excel بنجاح ✅');
           break;
+        }
         case 'word':
-          exportToWord(data, columns, enhancedOptions);
+          exportToWord(data, columns, {
+            ...enhancedOptions,
+            chartImage: chartImage || enhancedOptions.chartImage || null,
+          });
           toast.success('تم تصدير ملف Word بنجاح ✅');
           break;
         case 'pdf':
-          await exportToPDF(data, columns, enhancedOptions);
+          await exportToPDF(data, columns, {
+            ...enhancedOptions,
+            chartImage: chartImage || enhancedOptions.chartImage || null,
+          });
           toast.success('تم تصدير ملف PDF بنجاح ✅');
           break;
         default:
@@ -350,7 +447,13 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
                     <tr key={rowIdx} style={{ borderBottom: '1px solid #e2e8f0' }}>
                       {columns.map((col, colIdx) => (
                         <td key={colIdx} style={{ padding: '6px 4px', border: '1px solid #e2e8f0', textAlign: 'center', fontSize: 'inherit' }}>
-                          {col.render ? col.render(row) : col.exportAccessor ? col.exportAccessor(row) : row[col.accessor] ?? '-'}
+                          {col.render
+                            ? col.render(row)
+                            : col.exportAccessor
+                              ? (typeof col.exportAccessor === 'function' ? col.exportAccessor(row) : row[col.exportAccessor])
+                              : col.accessor
+                                ? (typeof col.accessor === 'function' ? col.accessor(row) : row[col.accessor])
+                                : '-'}
                         </td>
                       ))}
                     </tr>

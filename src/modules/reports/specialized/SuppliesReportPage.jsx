@@ -19,14 +19,14 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
   Cell, PieChart, Pie
 } from 'recharts';
-import { aggregateRecordsByPrice } from '../../../utils/reportUtils';
+import { aggregateRecordsByPrice, buildHierarchyLabel } from '../../../utils/reportUtils';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import PrintableTable from '../../../components/common/PrintableTable';
 import { toPng } from 'html-to-image';
 
 const SuppliesReportPage = () => {
   const toast = useToast();
-  const { activeHierarchy } = useGlobalApp();
+  const { activeHierarchy, workspaceMode, hierarchyNames } = useGlobalApp();
   const [loading, setLoading] = useState(false);
   const [viewType, setViewType] = useState('analytical'); // 'analytical' or 'administrative'
   const [data, setData] = useState([]);
@@ -211,7 +211,7 @@ const SuppliesReportPage = () => {
   const handlePremiumExport = async (type, { data, options }) => {
     try {
       let chartImage = null;
-      if (chartRef.current) chartImage = await toPng(chartRef.current, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+      if (chartRef.current) chartImage = await toPng(chartRef.current, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
       const enrichedOptions = { ...options, chartImage };
       if (type === 'excel') {
         const sheetsData = { 'تحليل المستلزمات': { data: data, columns: exportColumns, options: enrichedOptions } };
@@ -228,14 +228,28 @@ const SuppliesReportPage = () => {
         toast.success('تم تصدير Excel بنجاح');
         return true;
       }
-      if (type === 'word') { await exportToWord(data, exportColumns, enrichedOptions); toast.success('تم تصدير Word بنجاح'); return true; }
-      if (type === 'pdf') { await exportToPDF(data, exportColumns, enrichedOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
+      // Word/PDF: summary table + detail table (like the premium Excel export)
+      const summaryTable = {
+        data: [
+          { indicator: 'إجمالي القيمة', val: `${stats.totalValue.toLocaleString()} ج.م` },
+          { indicator: 'عدد البنود', val: stats.count },
+        ],
+        columns: [
+          { header: 'المؤشر', accessor: 'indicator' },
+          { header: 'القيمة', accessor: 'val' },
+        ],
+        title: 'ملخص التقرير',
+      };
+      const multiTables = [summaryTable, { data, columns: exportColumns, title: 'تفاصيل المستلزمات الطبية' }];
+      const wordPdfOptions = { ...enrichedOptions, tables: multiTables };
+      if (type === 'word') { await exportToWord(data, exportColumns, wordPdfOptions); toast.success('تم تصدير Word بنجاح'); return true; }
+      if (type === 'pdf') { await exportToPDF(data, exportColumns, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
       return false;
     } catch (err) { console.error(err); return false; }
   };
 
   return (
-    <PrintableTable title="تقرير المستلزمات الطبية" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="تقرير المستلزمات الطبية" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
       <div className="space-y-6 animate-fadeIn pb-20">
       <Breadcrumb items={[{ label: 'التقارير' }, { label: 'تقرير المستلزمات الطبية' }]} />
       
@@ -270,7 +284,7 @@ const SuppliesReportPage = () => {
       <Card className="p-6 no-print">
         <div className="w-full">
           <HierarchySelector 
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}
@@ -283,7 +297,7 @@ const SuppliesReportPage = () => {
             </div>
             <AutoComplete
               value={hierarchy.categoryId}
-              onChange={(val) => setHierarchy({ ...hierarchy, categoryId: val ?? '' })}
+              onChange={(val) => setHierarchy(prev => ({ ...prev, categoryId: val ?? '' }))}
               options={metaData.categories || []}
               getOptionLabel={(c) => c.name}
               getOptionValue={(c) => String(c.id)}
@@ -292,7 +306,7 @@ const SuppliesReportPage = () => {
             />
             {hierarchy.categoryId && (
               <button 
-                onClick={() => setHierarchy({ ...hierarchy, categoryId: '' })}
+                onClick={() => setHierarchy(prev => ({ ...prev, categoryId: '' }))}
                 className="text-[10px] font-black text-rose-500 hover:underline"
               >
                 إلغاء التصفية

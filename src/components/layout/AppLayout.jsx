@@ -1,15 +1,18 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useState, useMemo, Suspense, lazy, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Navbar from './Navbar';
 import Footer from './Footer';
-import logo from '../../assets/logo.png';
+import TopScrollbar from './TopScrollbar';
 import designerImg from '../../assets/Ahmed.jpeg';
 
 import { useGlobalApp } from '../../context/useGlobalApp';
 import { useSmartNotification } from '../../context/SmartNotificationContext';
 import PageTransition from '../ui/PageTransition';
 import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts';
+import { useAuth } from '../../context/AuthContext';
+import RecoverySetupModal from '../ui/RecoverySetupModal';
 import { CalendarX, X } from 'lucide-react';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -20,6 +23,9 @@ const TourGuide = lazy(() => import('../ui/TourGuide'));
 const CommandPalette = lazy(() => import('../ui/CommandPalette'));
 const GlobalSearchModal = lazy(() => import('../ui/GlobalSearchModal'));
 const NotificationCenter = lazy(() => import('../ui/NotificationCenter'));
+// Rendered here (inside the auth-gated layout) so the connection/DB health
+// checks only run once the user is authenticated — not during Splash, Login,
+// or First Run.
 const ConnectionStatusBar = lazy(() => import('../ui/ConnectionStatusBar'));
 
 // Featherweight fallback for lazy overlay/modals — just a tiny inert box
@@ -28,7 +34,7 @@ const OverlayFallback = () => null;
 
 const tourSteps = [
   {
-    target: 'header.sticky', 
+    target: '.topbar-sticky', 
     title: 'أهلاً بك في نظام إحصائياتي',
     content: 'هذه جولة شاملة للتعرف على واجهة النظام وأهم ميزاته وأقسامه. تم إضافة العديد من التحسينات الجديدة!',
   },
@@ -105,12 +111,41 @@ const PRIORITY_ROUTES = [
   { path: '/transactions/free-drugs',      delay: 8000  },
 ];
 
+// ── Legacy recovery prompt gate ───────────────────────────────────────
+// STRICT check: only an explicit `false` counts as a Legacy account (no
+// recovery code). `undefined`/`null` (e.g. mock/browser mode) are never
+// treated as Legacy. `dismissed` = the user chose "لاحقاً" this session.
+export const shouldShowLegacyRecovery = (user, dismissed) =>
+  user?.has_recovery_code === false && !dismissed;
+
 const AppLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
-  const { workspaceMode, hierarchyNames, isTourOpen, setIsTourOpen, missingMonthsAlert, dismissMissingMonths } = useGlobalApp();
+  const { isTourOpen, setIsTourOpen, missingMonthsAlert, dismissMissingMonths } = useGlobalApp();
   const { addNotification } = useSmartNotification();
+  const { user } = useAuth();
+
+  // Legacy accounts (recovery_hash IS NULL → has_recovery_code === false)
+  // get a one-time-per-session prompt to create a Recovery Code. Choosing
+  // "لاحقاً" dismisses it for the current session only (state only — nothing
+  // is persisted; it reappears on the next login if the account stays legacy).
+  //
+  // The modal stays OPEN once triggered until the user explicitly closes it.
+  // Deriving `isOpen` directly from the gate on every render would be wrong:
+  // completing the flow calls markRecoveryConfigured(), which flips
+  // has_recovery_code to true mid-flow and would close the modal before the
+  // one-time code display is ever seen. So we snapshot the gate once on mount
+  // (AppLayout only renders when authenticated) and only close explicitly.
+  const [legacyRecoveryDismissed, setLegacyRecoveryDismissed] = useState(false);
+  const [legacyRecoveryOpen, setLegacyRecoveryOpen] = useState(
+    () => shouldShowLegacyRecovery(user, legacyRecoveryDismissed),
+  );
+
+  const closeLegacyRecovery = () => {
+    setLegacyRecoveryOpen(false);
+    setLegacyRecoveryDismissed(true);
+  };
 
   // Listen for global notification events
   useEffect(() => {
@@ -154,34 +189,29 @@ const AppLayout = () => {
     },
   ], []);
   useKeyboardShortcuts(appShortcuts);
-  
-  const getHierarchyDisplay = () => {
-    const parts = [];
-    if (hierarchyNames.branch) parts.push(`فرع: ${hierarchyNames.branch}`);
-    if (hierarchyNames.area && (workspaceMode === 'areas' || workspaceMode === 'clinics')) parts.push(`منطقة: ${hierarchyNames.area}`);
-    if (hierarchyNames.clinic && workspaceMode === 'clinics') parts.push(`عيادة: ${hierarchyNames.clinic}`);
-    return parts.join(' | ');
-  };
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--color-bg)', color: 'var(--color-text)' }}>
-        {/* ─── 1. Print Header (Natural Flow - Top) ─── */}
-        <header className="only-print print-simple-header flex items-center justify-between w-full">
-           <div className="flex items-center gap-6">
-              <img src={logo} alt="Logo" className="w-20 h-20 object-contain" />
-              <div className="flex flex-col">
-                 <h1 className="text-3xl font-black text-[var(--color-primary)] mb-1">نظام إحصائيات الأدوية والمستلزمات</h1>
-                 <p className="text-lg font-bold text-slate-600">{getHierarchyDisplay()}</p>
-                 <p className="text-sm font-bold text-slate-400">الهيئة العامة للتأمين الصحي — منظومة الصرف الإلكتروني</p>
-              </div>
-           </div>
-           <div className="text-left">
-              <p className="text-sm font-bold text-slate-400 mb-1">تاريخ الطباعة</p>
-              <p className="text-xl font-black text-slate-800">{new Date().toLocaleDateString('ar-EG')}</p>
-           </div>
-        </header>
+        {/* ─── 1. Full-width Top Toolbar ───
+             Spans the ENTIRE app width (not just the content column) so every
+             top icon — theme toggle, user profile, search — sits inside it.
+             Sticky: stays pinned at the top while scrolling. The sidebar and
+             content start below it. */}
+        <div className="no-print sticky top-0 z-[45] topbar-sticky overflow-visible">
+          <Navbar
+            collapsed={collapsed}
+            onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+            onOpenGlobalSearch={() => setIsGlobalSearchOpen(true)}
+          />
+          {/* Full-window horizontal pan strip. Rendered OUTSIDE the <header>
+              on purpose: the header's backdrop-filter creates a containing
+              block for fixed descendants, which would shrink the strip to the
+              header's width. Here it is viewport-fixed like the native bottom
+              scrollbar, and the wrapper's height = the header's. */}
+          <TopScrollbar />
+        </div>
 
-        {/* ─── 2. Main App Structure ─── */}
+        {/* ─── 2. Sidebar (fixed; starts below the full-width toolbar) ─── */}
         <div className="no-print">
           <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
         </div>
@@ -191,13 +221,6 @@ const AppLayout = () => {
           style={{ marginRight: collapsed ? '72px' : '260px' }}
           dir="rtl"
         >
-          <div className="no-print">
-            <Navbar
-              collapsed={collapsed}
-              onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-              onOpenGlobalSearch={() => setIsGlobalSearchOpen(true)}
-            />
-          </div>
 
           {/* Global Missing Months Alert */}
           {missingMonthsAlert.length > 0 && (
@@ -225,8 +248,8 @@ const AppLayout = () => {
               <Outlet />
             </PageTransition>
 
-            {/* ─── 3. Print Designer Footer (Bottom) ─── */}
-            <div className="designer-branding">
+            {/* ─── 3. Print Designer Footer (Bottom, print-only) ─── */}
+            <div className="only-print designer-branding">
                <div className="flex items-center justify-between">
                   <div className="text-sm text-slate-400 font-bold">
                     جميع الحقوق محفوظة © {new Date().getFullYear()} | منظومة الصرف الإلكتروني المطورة
@@ -277,10 +300,19 @@ const AppLayout = () => {
           <NotificationCenter />
         </Suspense>
 
-        {/* Connection Status Bar (lazy) */}
+        {/* Connection Status Bar (lazy, auth-gated) — only active inside
+            the authenticated layout, not on Splash/Login/First Run. */}
         <Suspense fallback={<OverlayFallback />}>
           <ConnectionStatusBar />
         </Suspense>
+
+        {/* Legacy Recovery Setup prompt (session-only dismiss) */}
+        <RecoverySetupModal
+          isOpen={legacyRecoveryOpen}
+          onClose={closeLegacyRecovery}
+          legacyMode
+        />
+
       </div>
   );
 };

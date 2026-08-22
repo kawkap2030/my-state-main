@@ -93,7 +93,7 @@ const QuickAccessClinic = ({ branchId, dispenseMonth }) => {
   };
 
   return (
-    <Card className="h-full border-t-4 border-t-primary overflow-hidden">
+    <Card className="border-t-4 border-t-primary overflow-hidden">
       {/* Mini Tabs Header */}
       <div className="flex border-b border-slate-100 mb-6 -mx-6">
         <button 

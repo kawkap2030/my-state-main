@@ -1,16 +1,76 @@
-# React + Vite
+# منظومة إحصائيات الأدوية والمستلزمات الطبية
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**Drug Stats App** — تطبيق سطح مكتب متكامل لإدارة وحصر وتتبع عمليات صرف الأدوية والمستلزمات الطبية بفروع ومناطق وعيادات **الهيئة العامة للتأمين الصحي**.
 
-Currently, two official plugins are available:
+يعمل التطبيق **100% بدون إنترنت (Offline Mode)** — مبنى بتقنية Tauri + React + Vite مع قاعدة بيانات SQLite محلية.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## React Compiler
+## 🛠️ التقنيات المستخدمة
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+| الطبقة | التقنية |
+| ------ | ------- |
+| الواجهة | React 19 + Vite + Tailwind CSS 4 |
+| النواة | Tauri 2 (Rust) |
+| قاعدة البيانات | SQLite عبر `rusqlite` |
+| الاختبارات | Vitest (وحدة) + Playwright (E2E) |
+| التصدير | PDF (jsPDF + Amiri) / Word / Excel |
 
-## Expanding the ESLint configuration
+## 🚀 أوامر التشغيل
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### التطوير
+- `npm run dev` — تشغيل خادم Vite للتطوير (المنفذ 5174)
+- `npm run tauri dev` — تشغيل تطبيق سطح المكتب كاملاً بوضع التطوير
+
+### البناء
+- `npm run build` — بناء الواجهة للإنتاج (المخرجات في `dist/`)
+- `npm run preview` — معاينة البناء المحلي
+
+### الفحص والجودة
+- `npm run lint` — تشغيل ESLint على جميع الملفات
+- `npm run check:css` — فحص سلامة ملفات CSS (يُشغَّل تلقائياً قبل `dev` و`build`)
+
+### الاختبارات
+- `npm run test` — اختبارات الوحدة (Vitest)
+- `npm run test:e2e` — اختبارات E2E (Playwright)
+- `npm run test:all` — كل الاختبارات (وحدة + E2E)
+
+## 📁 هيكل المشروع
+
+```
+src/                  ← واجهة React
+├── modules/          ← وحدات الميزات (عمليات، تقارير، إدارة، تحليلات)
+├── components/       ← مكونات UI قابلة لإعادة الاستخدام
+├── context/          ← سياقات React (المصادقة، الإشعارات)
+├── hooks/            ← خطافات مخصصة
+├── utils/            ← أدوات التصدير والمساعدات
+└── router/           ← إعداد React Router
+src-tauri/            ← النواة Rust
+├── src/commands/     ← أوامر Tauri (20 ملف أوامر)
+├── src/db.rs         ← طبقة قاعدة البيانات
+└── tauri.conf.json   ← إعدادات Tauri
+schema.sql            ← مخطط قاعدة البيانات الكامل
+```
+
+## 👤 الدور الوظيفي
+
+- **admin** — مدير النظام: إدارة المستخدمين والصلاحيات والبيانات الأساسية
+- **data_entry** — مدخل بيانات: إدخال المنصرف الشهري والتفصيلي والتذاكر
+- **viewer** — مشاهد فقط: التقارير والتحليلات
+
+---
+
+## 🎫 صفحة التذاكر الطبية — الحماية من تكرار الإدخال
+
+عند إدخال بيانات التذاكر الطبية (أسبوعي / شهري / يومي) في `src/modules/transactions/medical-tickets/MedicalTicketsPage.jsx`، يفحص النظام قبل الحفظ ما إذا كانت الفترة نفسها (الشهر + الجهة + الأسبوع + الفترة + الفئة) قد أُدخلت من قبل:
+
+- **إعادة الإدخال بنفس القيم**: تمر بصمت (الفحص الخلفي `check_medical_tickets_exist` في `src-tauri/src/commands/tickets.rs` متساوي القيم — يكتشف التغيير الفعلي فقط).
+- **إعادة الإدخال بقيم مختلفة**: تظهر نافذة `ConfirmModal` بعنوان **«تم إدخال الفترة من قبل»** مع زر **«استبدال البيانات»** — يُحفظ فوق القديم عند التأكيد، ولا يُحفظ شيء عند «إلغاء».
+- **التبديل بين «عام» والفئات**: الخادم يحتفظ بتمثيل واحد لكل فترة (يُحذف الشكل الآخر بصمت في `save_medical_tickets_bulk`) — لذا تُعرض رسالة تحذير قبل التنفيذ لمنع الاستبدال الخاطئ.
+- **وضع التعديل**: يتجاوز النافذة لأن التعديل مقصود.
+
+التنفيذ: دالات `performSave` / `detectSaveConflicts` / `confirmOverwrite` مع حالة `pendingConflict` في `MedicalTicketsPage.jsx`. نفس نافذة تأكيد الاستبدال مطبّقة في الإدخال السريع `src/components/forms/QuickTicketsEntry.jsx` (بدون تحذير عام↔فئات لأن شبكته لا تخلط الإجمالي بالفئات).
+
+---
+
+*تصميم وإعداد وتطوير ك/ أحمد علي أحمد كوكب — جميع الحقوق محفوظة © 2026*

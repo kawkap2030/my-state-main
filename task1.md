@@ -1,4 +1,4 @@
-# Drug Stats App - Enterprise Implementation
+# منظومة إحصائيات الأدوية والمستلزمات الطبية - Enterprise Implementation
 
 - [x] Initialize Tauri + Rust Backend
 - [x] Implement Rust CRUD commands

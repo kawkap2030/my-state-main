@@ -48,7 +48,7 @@ const ALL_ROUTES = [
   { id: 'executive',          path: '/reports/executive',                         label: 'التقرير التنفيذي',       category: 'التقارير',         icon: ClipboardList },
   { id: 'demographic',        path: '/reports/demographic',                       label: 'تحليل الفئات',           category: 'التقارير',         icon: PieChart },
   { id: 'anomaly',            path: '/reports/anomaly',                           label: 'رصد الانحرافات',         category: 'التقارير',         icon: FileWarning },
-  { id: 'reconciliation',     path: '/reports/reconciliation',                    label: 'المراجعة والمطابقة',     category: 'التقارير',         icon: Scale },
+  { id: 'reconciliation',     path: '/reports/reconciliation',                    label: 'الإجماليات الموحدة',     category: 'التقارير',         icon: Scale },
   { id: 'data-quality',       path: '/reports/data-quality',                      label: 'جودة البيانات',          category: 'التقارير',         icon: CheckSquare },
   { id: 'pivot',              path: '/reports/pivot',                             label: 'التقارير المحورية',      category: 'التقارير',         icon: LayoutGrid },
   { id: 'judicial-analytics', path: '/reports/judicial-analytics',                label: 'تحليل الأحكام',          category: 'التقارير',         icon: Scale },

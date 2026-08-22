@@ -139,6 +139,7 @@ const NotificationToast = ({ toast, onDismiss, isDark }) => {
 
       {/* Close button */}
       <button
+        data-testid="toast-close"
         onClick={(e) => { e.stopPropagation(); onDismiss(toast.id); }}
         className="shrink-0 p-1 rounded-lg cursor-pointer opacity-40 hover:opacity-100 transition-all"
         style={{ color: c.text }}
@@ -151,7 +152,12 @@ const NotificationToast = ({ toast, onDismiss, isDark }) => {
 
 // ─── ToastProvider ──────────────────────────────────────────────────
 export const ToastProvider = ({ children }) => {
-  return <SmartNotificationProvider>{children}</SmartNotificationProvider>;
+  return (
+    <SmartNotificationProvider>
+      {children}
+      <ToastRenderer />
+    </SmartNotificationProvider>
+  );
 };
 
 // ─── ToastRenderer (renders visible toasts from SmartNotificationContext) ──

@@ -133,8 +133,15 @@ const JudicialAnalyticsPage = () => {
         }, { fileName: 'judicial_analytics', title: 'تحليل الأحكام القضائية' });
         return true;
       }
-      if (type === 'word') { exportToWord(patientRows, patientCols, exportOptions); return true; }
-      if (type === 'pdf') { await exportToPDF(patientRows, patientCols, exportOptions); return true; }
+      // Word/PDF: mirror the Excel sheets as separate titled tables
+      const multiTables = [
+        { data: patientRows, columns: patientCols, title: 'كبار المرضى' },
+        { data: diagRows, columns: diagCols, title: 'التشخيصات' },
+        { data: contRows, columns: contCols, title: 'الاستمرارية' },
+      ];
+      const wordPdfOptions = { ...exportOptions, tables: multiTables };
+      if (type === 'word') { exportToWord(patientRows, patientCols, wordPdfOptions); return true; }
+      if (type === 'pdf') { await exportToPDF(patientRows, patientCols, wordPdfOptions); return true; }
       return false;
     } catch (e) {
       toast.error(`فشل التصدير: ${e.message || e}`);

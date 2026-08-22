@@ -60,14 +60,14 @@ const ExecutiveReportPage = () => {
           if (pieChartRef.current) {
             const el = pieChartRef.current.querySelector('.recharts-wrapper');
             if (el) {
-              const img = await toPng(el, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+              const img = await toPng(el, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
               setCostPieImage(img);
             }
           }
           if (barChartRef.current) {
             const el = barChartRef.current.querySelector('.recharts-wrapper');
             if (el) {
-              const img = await toPng(el, { quality: 1.0, pixelRatio: 2, backgroundColor: '#ffffff' });
+              const img = await toPng(el, { quality: 0.85, pixelRatio: 1, backgroundColor: '#ffffff' });
               setComparisonBarImage(img);
             }
           }
@@ -251,67 +251,30 @@ const ExecutiveReportPage = () => {
         return true;
       }
 
-      // Word & PDF: Build a unified flat data containing all sections
-      const combinedColumns = [
-        { header: 'البيان الإحصائي / البند', accessor: 'label' },
-        { header: 'الحالات / العدد', accessor: 'cases' },
-        { header: 'الكمية المنصرفة', accessor: 'quantity' },
-        { header: 'التكلفة والمنصرف المالي', accessor: 'cost' }
+      // Word & PDF: mirror the Excel sheets as separate titled tables
+      const multiTables = [
+        { data: summaryRows, columns: exportColumns, title: 'الملخص المالي' },
       ];
-
-      const combinedRows = [];
-
-      // Add Summary Section
-      combinedRows.push({ label: '═══ الملخص المالي الإحصائي ═══', cases: '', quantity: '', cost: '' });
-      summaryRows.forEach(row => {
-        combinedRows.push({
-          label: row.item || '',
-          cases: row.cases || '',
-          quantity: '--',
-          cost: row.cost || ''
-        });
-      });
-
-      // Add Drugs Section
       if (topDrugsRows.length > 0) {
-        combinedRows.push({ label: '', cases: '', quantity: '', cost: '' });
-        combinedRows.push({ label: '═══ الأدوية الأكثر استهلاكاً وكلفة (أهم 5 أصناف) ═══', cases: '', quantity: '', cost: '' });
-        topDrugsRows.forEach(row => {
-          combinedRows.push({
-            label: row.name,
-            cases: row.cases,
-            quantity: row.quantity,
-            cost: row.cost
-          });
-        });
+        multiTables.push({ data: topDrugsRows, columns: topDrugsCols, title: 'الأدوية الأكثر استهلاكاً' });
       }
-
-      // Add Insulin Section
       if (topInsulinRows.length > 0) {
-        combinedRows.push({ label: '', cases: '', quantity: '', cost: '' });
-        combinedRows.push({ label: '═══ أنواع الإنسولين الأكثر استهلاكاً وكلفة (أهم 5 أصناف) ═══', cases: '', quantity: '', cost: '' });
-        topInsulinRows.forEach(row => {
-          combinedRows.push({
-            label: row.name,
-            cases: row.cases,
-            quantity: row.quantity,
-            cost: row.cost
-          });
-        });
+        multiTables.push({ data: topInsulinRows, columns: topInsulinCols, title: 'الإنسولين الأكثر استهلاكاً' });
       }
 
       const unifiedOptions = {
         ...exportOptions,
         title: 'التقرير التنفيذي الشامل والمفصل',
-        subtitle: `نطاق التقرير: التقرير التنفيذي العام والتحليلي للأدوية والإنسولين`
+        subtitle: `نطاق التقرير: التقرير التنفيذي العام والتحليلي للأدوية والإنسولين`,
+        tables: multiTables,
       };
 
       if (type === 'word') {
-        exportToWord(combinedRows, combinedColumns, unifiedOptions);
+        exportToWord(summaryRows, exportColumns, unifiedOptions);
         return true;
       }
       if (type === 'pdf') {
-        await exportToPDF(combinedRows, combinedColumns, unifiedOptions);
+        await exportToPDF(summaryRows, exportColumns, unifiedOptions);
         return true;
       }
       return false;
@@ -349,7 +312,7 @@ const ExecutiveReportPage = () => {
       <Card className="p-6 no-print space-y-6">
         <div className="w-full">
           <HierarchySelector 
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}

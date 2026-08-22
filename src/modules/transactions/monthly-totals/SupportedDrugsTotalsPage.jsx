@@ -22,13 +22,14 @@ import invoke from "../../../api/tauriApi";
 import MonthlyHistoryTable from "../../../components/common/MonthlyHistoryTable";
 
 import { useGlobalApp } from "../../../context/useGlobalApp";
+import { buildHierarchyLabel } from "../../../utils/reportUtils";
 
 import PrintableTable from '../../../components/common/PrintableTable';
 
 const SupportedDrugsTotalsPage = () => {
   const location = useLocation();
   const toast = useToast();
-  const { activeHierarchy, isIsolationExceptionActive, setIsIsolationExceptionActive, lockedLevel, setWorkspaceMode } = useGlobalApp();
+  const { activeHierarchy, workspaceMode, hierarchyNames, isIsolationExceptionActive, setIsIsolationExceptionActive, lockedLevel, setWorkspaceMode } = useGlobalApp();
   
   // Cleanup exception on unmount
   React.useEffect(() => {
@@ -161,6 +162,7 @@ const SupportedDrugsTotalsPage = () => {
     hierarchy?.clinicId,
     hierarchy?.dispenseMonth,
     hierarchy?.level,
+    toast,
   ]);
 
   React.useEffect(() => {
@@ -278,7 +280,7 @@ const SupportedDrugsTotalsPage = () => {
   ];
 
   return (
-    <PrintableTable title="صرف الأدوية المدعمة الشهري" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="صرف الأدوية المدعمة الشهري" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
     <div className="space-y-6 animate-fadeIn pb-20">
       <div className="no-print space-y-6">
         {/* Premium Header Banner */}
@@ -296,7 +298,7 @@ const SupportedDrugsTotalsPage = () => {
           </div>
           <div className="flex items-center gap-3">
             <Link
-              to="/"
+              to="/reports/specialized/supported-drugs"
               className="flex items-center gap-2 px-5 py-2.5 bg-white text-[var(--color-success)] rounded-xl font-black text-sm hover:bg-emerald-50 transition-all shadow-lg"
             >
               <BarChart3 size={18} /> التقارير
@@ -305,9 +307,11 @@ const SupportedDrugsTotalsPage = () => {
         </div>
 
         {/* ═══════ Add New Supported Drug Record ═══════ */}
-        <Card className="p-0 overflow-hidden border-none shadow-xl">
+        {/* NOTE: no overflow-hidden on the card — it would clip the AutoComplete
+            dropdowns inside HierarchySelector (the list gets cut off mid-scroll). */}
+        <Card className="p-0 border-none shadow-xl">
           {/* Section Header */}
-          <div className="bg-[var(--color-success)] text-white p-4 flex items-center gap-3">
+          <div className="bg-[var(--color-success)] text-white p-4 flex items-center gap-3 rounded-t-[20px]">
             <DollarSign size={20} />
             <h3 className="text-base font-black">
               إضافة سجل صرف أدوية مدعمة جديد
@@ -353,7 +357,7 @@ const SupportedDrugsTotalsPage = () => {
             {/* Hierarchy Selectors */}
             <HierarchySelector
               onSelectionChange={(data) =>
-                setHierarchy({ ...hierarchy, ...data })
+                setHierarchy(prev => ({ ...prev, ...data }))
               }
               initialBranch={hierarchy.branchId}
               initialArea={hierarchy.areaId}
@@ -470,7 +474,7 @@ const SupportedDrugsTotalsPage = () => {
                   </label>
                   <textarea
                     rows="3"
-                    className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-4 rounded-xl text-sm font-medium text-right text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-success)]/20 transition-all resize-none"
+                    className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-4 rounded-xl text-sm font-medium text-right text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-success)]/20 transition-all resize-y"
                     placeholder="أدخل أي ملاحظات إضافية هنا..."
                     value={formData.notes}
                     onChange={(e) => handleChange("notes", e.target.value)}

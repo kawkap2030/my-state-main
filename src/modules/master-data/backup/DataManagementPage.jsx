@@ -78,6 +78,11 @@ const DataManagementPage = () => {
   const [pendingClearPayload, setPendingClearPayload] = useState(null);
   const [backupPromptLoading, setBackupPromptLoading] = useState(false);
 
+  // Daily auto-backup toggle
+  const [dailyBackupEnabled, setDailyBackupEnabled] = useState(() =>
+    localStorage.getItem('dailyAutoBackup') === 'true'
+  );
+
   // Restore confirmation modal states
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [restoreChecked, setRestoreChecked] = useState(false);
@@ -99,6 +104,13 @@ const DataManagementPage = () => {
     loadBackupNotes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleToggleDailyBackup = () => {
+    const next = !dailyBackupEnabled;
+    setDailyBackupEnabled(next);
+    localStorage.setItem('dailyAutoBackup', String(next));
+    toast.info(next ? '✅ تم تفعيل النسخ الاحتياطي التلقائي اليومي' : '🚫 تم تعطيل النسخ الاحتياطي التلقائي اليومي');
+  };
 
   const loadBackups = async () => {
     setBackupsListLoading(true);
@@ -177,23 +189,28 @@ const DataManagementPage = () => {
   };
 
   const handleImportBackup = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
+    const file = e?.target?.files?.[0];
+    const sourcePath = file ? (file.path || file.name) : null;
+
     try {
-      const filename = await invoke('import_backup', { sourcePath: file.path || file.name });
-      toast.success(`تم استيراد النسخة الاحتياطية بنجاح: ${filename}`);
+      const filename = await invoke('import_backup', { sourcePath });
+      toast.success(`تم استيراد وتدقيق النسخة الاحتياطية بنجاح: ${filename}`);
       loadBackups();
     } catch (err) {
-      toast.error('فشل في استيراد النسخة: ' + err);
+      if (err !== 'تم إلغاء اختيار الملف') {
+        toast.error('فشل في استيراد النسخة: ' + err);
+      }
     }
-    // Reset file input
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleDeleteBackup = async (filename) => {
     if (!window.confirm(`هل أنت متأكد من حذف النسخة الاحتياطية: ${filename}؟`)) return;
     try {
+      // Safety: create a backup before deleting, so user can restore if mistaken
+      try {
+        await invoke('auto_backup', { maxBackups: 30 });
+      } catch (_) { /* backup failure must not block deletion */ }
       await invoke('delete_backup', { filename });
       toast.success('تم حذف النسخة الاحتياطية بنجاح');
       loadBackups();
@@ -206,6 +223,10 @@ const DataManagementPage = () => {
     if (selectedBackups.length === 0) return;
     if (!window.confirm(`هل أنت متأكد من حذف ${selectedBackups.length} نسخة احتياطية؟`)) return;
     try {
+      // Safety: create a backup before bulk deletion, so user can restore if mistaken
+      try {
+        await invoke('auto_backup', { maxBackups: 30 });
+      } catch (_) { /* backup failure must not block deletion */ }
       const deleted = await invoke('delete_multiple_backups', { filenames: selectedBackups });
       toast.success(`تم حذف ${deleted} نسخة احتياطية بنجاح`);
       setSelectedBackups([]);
@@ -457,13 +478,19 @@ const DataManagementPage = () => {
 
         <div className="flex gap-2 flex-wrap">
           <Button
-            onClick={loadSummary}
+            onClick={() => {
+              if (activeTab === 'backup') {
+                loadBackups();
+              } else {
+                loadSummary();
+              }
+            }}
             variant="ghost"
             className="gap-2 text-xs font-bold"
-            disabled={summaryLoading}
+            disabled={activeTab === 'backup' ? backupsListLoading : summaryLoading}
           >
-            <RefreshCw size={14} className={summaryLoading ? 'animate-spin' : ''} />
-            تحديث البيانات
+            <RefreshCw size={14} className={(activeTab === 'backup' ? backupsListLoading : summaryLoading) ? 'animate-spin' : ''} />
+            {activeTab === 'backup' ? 'تحديث قائمة النسخ' : 'تحديث البيانات'}
           </Button>
           <Button
             onClick={handleCreateBackup}
@@ -487,6 +514,22 @@ const DataManagementPage = () => {
               {dbSize !== null ? `${dbSize.toFixed(2)} MB` : '...'}
             </span>
           </div>
+        </div>
+
+        <div className="neu-card px-4 py-3 flex items-center gap-3 bg-[var(--color-bg-card)]" style={{ borderRadius: '14px' }}>
+          <Clock size={18} className={dailyBackupEnabled ? 'text-emerald-500' : 'text-slate-400'} />
+          <div>
+            <span className="text-[10px] text-slate-400 font-bold block">نسخ يومي تلقائي</span>
+            <span className="text-sm font-black" style={{ color: 'var(--color-text)' }}>
+              {dailyBackupEnabled ? 'مفعّل ✅' : 'معطّل'}
+            </span>
+          </div>
+          <button
+            onClick={handleToggleDailyBackup}
+            className={`relative w-10 h-5 rounded-full transition-all duration-300 cursor-pointer ${dailyBackupEnabled ? 'bg-emerald-500' : 'bg-slate-300'}`}
+          >
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all duration-300 ${dailyBackupEnabled ? 'left-[22px]' : 'left-0.5'}`} />
+          </button>
         </div>
 
         <div className="neu-card px-4 py-3 flex items-center gap-3 bg-[var(--color-bg-card)]" style={{ borderRadius: '14px' }}>
@@ -575,7 +618,7 @@ const DataManagementPage = () => {
                   نسخ تلقائي مع تدوير (حد أقصى 10)
                 </Button>
                 <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleImportBackup} />
-                <Button size="sm" variant="secondary" className="text-xs" onClick={() => fileInputRef.current?.click()}>
+                <Button size="sm" variant="secondary" className="text-xs" onClick={() => handleImportBackup()}>
                   <Upload size={12} className="ml-1.5" />
                   استيراد نسخة خارجية (ZIP)
                 </Button>

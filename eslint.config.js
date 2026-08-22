@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'src-tauri', 'check_db.js']),
+  globalIgnores(['dist', 'src-tauri', 'check_db.js', '.kilo']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -51,9 +51,10 @@ export default defineConfig([
       sourceType: 'commonjs',
     },
   },
-  // Node.js ESM scripts (playwright.config.js uses process.env)
+  // Node.js ESM scripts (vite.config.js + playwright.config.js use process.env;
+  // scripts/**/*.mjs are .mjs files that the main {js,jsx} block doesn't match)
   {
-    files: ['playwright.config.js'],
+    files: ['vite.config.js', 'playwright.config.js', 'scripts/**/*.mjs'],
     languageOptions: {
       globals: { ...globals.node },
       sourceType: 'module',

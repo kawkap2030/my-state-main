@@ -19,7 +19,7 @@
  *   - Animated transitions between states
  */
 import React, { Suspense, Component } from 'react';
-import { RefreshCw, Home, AlertTriangle, WifiOff, CloudOff } from 'lucide-react';
+import { RefreshCw, Home, AlertTriangle } from 'lucide-react';
 import LoadingFallback from './LoadingFallback';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -33,28 +33,22 @@ class LazyErrorBoundary extends Component {
       hasError: false,
       error: null,
       errorInfo: null,
-      isNetworkError: false,
+      isChunkError: false,
       retryKey: 0, // incremented on retry to force React.lazy() to re-attempt
     };
   }
 
   static getDerivedStateFromError(error) {
-    // Detect chunk-load errors (network failures, 404s, etc.)
     const msg = (error && error.message) || '';
-    const isNetwork =
+    // Only detect genuine chunk/asset load failures
+    const isChunkLoad =
       msg.includes('Loading chunk') ||
-      msg.includes('ChunkLoadError') ||
-      msg.includes('dynamically imported') ||
-      msg.includes('Failed to fetch') ||
-      msg.includes('NetworkError') ||
-      msg.includes('network') ||
-      msg.includes('timeout') ||
-      msg.includes('abort');
+      msg.includes('ChunkLoadError');
 
     return {
       hasError: true,
       error,
-      isNetworkError: isNetwork,
+      isChunkError: isChunkLoad,
     };
   }
 
@@ -83,7 +77,7 @@ class LazyErrorBoundary extends Component {
       return <ErrorFallback
         name={this.props.name}
         error={this.state.error}
-        isNetwork={this.state.isNetworkError}
+        isChunk={this.state.isChunkError}
         onRetry={this.handleRetry}
         onHome={this.handleGoHome}
       />;
@@ -97,7 +91,7 @@ class LazyErrorBoundary extends Component {
 // ERROR FALLBACK UI
 // ═══════════════════════════════════════════════════════════════════════════
 
-const ErrorFallback = ({ name, error, isNetwork, onRetry, onHome }) => {
+const ErrorFallback = ({ name, error, isChunk, onRetry, onHome }) => {
   const errorMsg = error?.message || 'حدث خطأ غير متوقع';
 
   return (
@@ -120,13 +114,13 @@ const ErrorFallback = ({ name, error, isNetwork, onRetry, onHome }) => {
         <div
           className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6"
           style={{
-            background: isNetwork
+            background: isChunk
               ? 'rgba(245,158,11,0.12)'
               : 'rgba(239,68,68,0.1)',
           }}
         >
-          {isNetwork ? (
-            <WifiOff size={40} style={{ color: '#f59e0b' }} />
+          {isChunk ? (
+            <RefreshCw size={36} style={{ color: '#f59e0b' }} />
           ) : (
             <AlertTriangle size={40} style={{ color: '#ef4444' }} />
           )}
@@ -137,7 +131,7 @@ const ErrorFallback = ({ name, error, isNetwork, onRetry, onHome }) => {
           className="text-xl font-black mb-2"
           style={{ color: 'var(--color-text)' }}
         >
-          {isNetwork ? 'انقطع الاتصال بالخادم' : 'تعذر تحميل الصفحة'}
+          {isChunk ? 'تعذر تحميل ملفات الصفحة' : 'تعذر تحميل الصفحة'}
         </h2>
 
         {/* Page name */}
@@ -182,9 +176,9 @@ const ErrorFallback = ({ name, error, isNetwork, onRetry, onHome }) => {
           className="text-sm mb-8 leading-relaxed"
           style={{ color: 'var(--color-text-muted)' }}
         >
-          {isNetwork
-            ? 'تحقق من اتصالك بالإنترنت وحاول مرة أخرى. قد يكون الخادم غير متاح مؤقتاً.'
-            : 'حدث خطأ أثناء تحميل هذه الصفحة. يمكنك إعادة المحاولة أو العودة للصفحة الرئيسية.'}
+          {isChunk
+            ? 'تعذر تحميل ملفات هذه الصفحة. يمكنك إعادة المحاولة أو إعادة تشغيل التطبيق.'
+            : 'تعذر تحميل الصفحة بسبب خطأ داخلي في التطبيق. يمكنك إعادة المحاولة أو العودة للصفحة الرئيسية.'}
         </p>
 
         {/* Actions */}

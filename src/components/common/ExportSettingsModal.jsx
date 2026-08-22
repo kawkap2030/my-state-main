@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   X, FileSpreadsheet, FileText, FileType, Settings2,
   User, ShieldCheck, Hash, LayoutTemplate, Type, Maximize2,
-  FileSignature, Save, Bookmark, Trash2, Star, Plus, Check, Globe
+  FileSignature, Save, Bookmark, Trash2, Star, Plus, Check, Globe, GripVertical
 } from 'lucide-react';
-import useReportSignatures from '../../hooks/useReportSignatures';
 import useExportPresets from '../../hooks/useExportPresets';
 import { useAuth } from '../../context/AuthContext';
 
@@ -27,7 +26,6 @@ const ExportSettingsModal = ({
   title = 'تقرير',
   subtitle = '',
 }) => {
-  const { signatures } = useReportSignatures();
   const {
     presets,
     loading: _presetsLoading,
@@ -38,6 +36,8 @@ const ExportSettingsModal = ({
     presetToSettings,
     savePreset,
     deletePreset,
+    setDefaultPreset,
+    reorderPresets,
     canDelete,
     _canChangeScope,
   } = useExportPresets();
@@ -57,6 +57,98 @@ const ExportSettingsModal = ({
   const [newPresetName, setNewPresetName] = useState('');
   const [newPresetScope, setNewPresetScope] = useState('private');
   const [presetToast, setPresetToast] = useState('');
+  const [editingPresetId, setEditingPresetId] = useState(null);
+  const [editingPresetName, setEditingPresetName] = useState('');
+  const editingCancelledRef = useRef(false);
+
+  // ── Inline edit preset name ─────────────────────────────────────────
+  const startEditingPreset = (preset) => {
+    setEditingPresetId(preset.id);
+    setEditingPresetName(preset.name);
+    editingCancelledRef.current = false;
+  };
+
+  const saveEditingPreset = async () => {
+    // If user pressed Escape, the ref is set — don't save
+    if (editingCancelledRef.current) {
+      editingCancelledRef.current = false;
+      return;
+    }
+    if (!editingPresetName.trim() || !editingPresetId) return;
+    const preset = presets.find(p => p.id === editingPresetId);
+    if (!preset) return;
+    // If name didn't change, just cancel
+    if (editingPresetName.trim() === preset.name) {
+      setEditingPresetId(null);
+      setEditingPresetName('');
+      return;
+    }
+    try {
+      await savePreset({
+        id: preset.id,  // Pass the original ID so Rust updates by ID, not by name
+        name: editingPresetName.trim(),
+        scope: preset.scope || 'private',
+        orientation: preset.orientation,
+        marginPreset: preset.margin_preset,
+        showPageNumbers: Boolean(preset.show_page_numbers),
+        showSignatures: Boolean(preset.show_signatures),
+        preparerName: preset.preparer_name || '',
+        managerName: preset.manager_name || '',
+        approvalNumber: preset.approval_number || '',
+        isDefault: Boolean(preset.is_default),
+      });
+      setEditingPresetId(null);
+      setEditingPresetName('');
+      setPresetToast(`✏️ تم تعديل الاسم إلى "${editingPresetName.trim()}"`);
+      setTimeout(() => setPresetToast(''), 2000);
+    } catch (_) {
+      setPresetToast('❌ فشل تعديل الاسم');
+    }
+  };
+
+  // ── Drag & Drop handlers for preset reordering ─────────────────────
+  const handleDragStart = useCallback((e, presetId) => {
+    e.dataTransfer.setData('text/plain', presetId.toString());
+    e.currentTarget.style.opacity = '0.4';
+  }, []);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.currentTarget.style.opacity = '0.6';
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.currentTarget.style.opacity = '1';
+  }, []);
+
+  const handleDrop = useCallback(async (e, targetId) => {
+    e.preventDefault();
+    // Reset all hover-opacity artifacts
+    document.querySelectorAll('[data-preset-chip]').forEach(el => {
+      el.style.opacity = '1';
+    });
+    const draggedIdStr = e.dataTransfer.getData('text/plain');
+    if (!draggedIdStr) return;
+    const draggedId = parseInt(draggedIdStr, 10);
+    if (draggedId === targetId) return;
+
+    const ids = presets.map(p => p.id);
+    const fromIdx = ids.indexOf(draggedId);
+    const toIdx = ids.indexOf(targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    // Reorder array
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, draggedId);
+
+    try {
+      await reorderPresets(ids);
+      setPresetToast('✅ تم إعادة ترتيب الإعدادات');
+      setTimeout(() => setPresetToast(''), 2000);
+    } catch (_) {
+      setPresetToast('❌ فشل إعادة الترتيب');
+    }
+  }, [presets, reorderPresets]);
 
   // ── Load settings when modal opens ──────────────────────────────────
    
@@ -67,10 +159,8 @@ const ExportSettingsModal = ({
     if (defaultPreset) {
       const settings = presetToSettings(defaultPreset);
       if (settings) applySettings(settings);
-    } else if (signatures) {
-      setPreparerName(signatures.preparerName || user?.username || '');
-      setManagerName(signatures.managerName || '');
-      setApprovalNumber(signatures.approvalNumber || '');
+    } else {
+      setPreparerName(user?.username || '');
     }
     setShowSavePreset(false);
     setNewPresetName('');
@@ -119,6 +209,7 @@ const ExportSettingsModal = ({
         approvalNumber: approvalNumber || '',
         isDefault: presets.length === 0,
       });
+      // The preset already contains all signature data — no extra call needed
       setNewPresetName('');
       setShowSavePreset(false);
       setPresetToast('✅ تم حفظ الإعدادات كـ "' + newPresetName.trim() + '"');
@@ -252,7 +343,63 @@ const ExportSettingsModal = ({
                 const canDeleteThis = canDelete(preset);
 
                 return (
-                  <div key={preset.id} className="flex items-center gap-1">
+                  <div
+                    key={preset.id}
+                    className="flex items-center gap-0.5"
+                    data-preset-chip
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, preset.id)}
+                    style={{
+                      transition: 'opacity 0.2s',
+                    }}
+                  >
+                    {/* Drag handle — draggable span, larger and more visible */}
+                    <span
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, preset.id)}
+                      className="flex items-center justify-center rounded cursor-grab active:cursor-grabbing hover:bg-[var(--color-bg)]"
+                      style={{
+                        color: 'var(--color-text-muted)',
+                        opacity: 0.5,
+                        width: '22px',
+                        height: '22px',
+                        fontSize: '14px',
+                      }}
+                      title="اسحب لإعادة الترتيب"
+                    >
+                      <GripVertical size={16} />
+                    </span>
+                    {/* Set as default button — show for ALL presets that are not default */}
+                    {!preset.is_default && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await setDefaultPreset(preset.id);
+                            setPresetToast(`⭐ تم تعيين "${preset.name}" كافتراضي`);
+                            window.dispatchEvent(new CustomEvent('global:notification', {
+                              detail: {
+                                type: 'success',
+                                message: `⭐ تم تعيين "${preset.name}" كتوقيع افتراضي`,
+                                options: { dedupKey: 'default-preset', duration: 4000, persistInHistory: true }
+                              }
+                            }));
+                            setTimeout(() => setPresetToast(''), 2000);
+                          } catch (err) {
+                            setPresetToast('❌ فشل التعيين كافتراضي');
+                          }
+                        }}
+                        className="p-1 rounded-md hover:bg-[var(--color-primary-bg)] transition-all cursor-pointer"
+                        style={{
+                          color: '#f59e0b',
+                          opacity: 0.7,
+                        }}
+                        title="تعيين كافتراضي"
+                      >
+                        <Star size={10} />
+                      </button>
+                    )}
+                    {/* Preset button */}
                     <button
                       onClick={() => handlePresetSelect(preset.id)}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
@@ -284,15 +431,63 @@ const ExportSettingsModal = ({
                           عام
                         </span>
                       )}
-                      <span>{preset.name}</span>
+                      {editingPresetId === preset.id ? (
+                        <input
+                          type="text"
+                          value={editingPresetName}
+                          onChange={e => setEditingPresetName(e.target.value)}
+                          onBlur={saveEditingPreset}
+                          onKeyDown={e => {
+                            e.stopPropagation();
+                            if (e.key === 'Enter') { editingCancelledRef.current = false; saveEditingPreset(); }
+                            if (e.key === 'Escape') {
+                              editingCancelledRef.current = true;
+                              // Force blur to cancel without saving
+                              e.target.blur();
+                            }
+                          }}
+                          className="w-20 px-1 py-0.5 rounded text-[10px]"
+                          style={{
+                            background: '#fff',
+                            color: '#000',
+                            border: '1px solid var(--color-primary)',
+                            textAlign: 'right',
+                          }}
+                          onClick={e => e.stopPropagation()}
+                          autoFocus
+                        />
+                      ) : (
+                        <span
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            startEditingPreset(preset);
+                          }}
+                          title="نقر مزدوج لتعديل الاسم"
+                        >
+                          {preset.name}
+                        </span>
+                      )}
                       {preset.user_name && isSharedPreset && !isMyPreset && (
                         <span className="text-[8px] opacity-60" style={{ color: 'var(--color-text-muted)' }}>
                           {preset.user_name}
                         </span>
                       )}
                       {activePresetId === preset.id && <Check size={10} />}
-                    </button>
-                    {canDeleteThis && (
+                    </button>                      {/* Edit name button — always visible for own presets */}
+                      {(isAdmin || preset.user_id === user?.id || !preset.user_id) && editingPresetId !== preset.id && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startEditingPreset(preset);
+                          }}
+                          className="p-1 rounded-md hover:bg-[var(--color-primary-bg)] transition-all cursor-pointer"
+                          style={{ color: 'var(--color-primary)', opacity: 0.4 }}
+                          title="تعديل الاسم"
+                        >
+                          <span style={{ fontSize: '10px', lineHeight: 1 }}>✏️</span>
+                        </button>
+                      )}
+                      {canDeleteThis && (
                       <button
                         onClick={async () => {
                           try {
@@ -420,6 +615,47 @@ const ExportSettingsModal = ({
                 />
               </div>
             </div>
+            {/* Save to current preset button */}
+            {activePresetId && (() => {
+              const activePreset = getPresetById(activePresetId);
+              if (!activePreset) return null;
+              return (
+                <div className="mt-3">
+                  <button
+                    onClick={async () => {
+                      try {
+                        await savePreset({
+                          id: activePresetId,
+                          name: activePreset.name,
+                          scope: activePreset.scope || 'private',
+                          orientation,
+                          marginPreset,
+                          showPageNumbers,
+                          showSignatures,
+                          preparerName: preparerName || user?.username || '',
+                          managerName: managerName || '',
+                          approvalNumber: approvalNumber || '',
+                          isDefault: Boolean(activePreset.is_default),
+                        });
+                        setPresetToast('✅ تم تحديث "' + activePreset.name + '"');
+                        setTimeout(() => setPresetToast(''), 2000);
+                      } catch (_) {
+                        setPresetToast('❌ فشل التحديث');
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
+                    style={{
+                      background: 'var(--color-primary)',
+                      color: '#fff',
+                      opacity: 0.85,
+                    }}
+                  >
+                    <Save size={11} />
+                    حفظ في هذا الإعداد
+                  </button>
+                </div>
+              );
+            })()}
           </div>
 
           {/* ── Section: تنسيق الورقة ── */}

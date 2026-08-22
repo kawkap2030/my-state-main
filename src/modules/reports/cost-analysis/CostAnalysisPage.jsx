@@ -8,8 +8,10 @@ import ExportMenu from '../../../components/ui/ExportMenu';
 import PrintableTable from '../../../components/common/PrintableTable';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
+import { useGlobalApp } from '../../../context/useGlobalApp';
+import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import html2canvas from 'html2canvas';
-import { exportToExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
+import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import { useRef } from 'react';
 import {
   DollarSign, Search, TrendingUp, Award,
@@ -67,6 +69,7 @@ const COLORS = [
 
 const CostAnalysisPage = () => {
   const toast = useToast();
+  const { workspaceMode, hierarchyNames } = useGlobalApp();
   const [activeTab, setActiveTab] = useState('breakdown');
   const [loading, setLoading] = useState(false);
   const [selectedTime, setSelectedTime] = useState('current');
@@ -193,7 +196,31 @@ const CostAnalysisPage = () => {
            console.error('Failed to capture chart:', err);
         }
      }
-     if (format === 'excel') await exportToExcel(data, columns, { ...options, chartImage });
+     if (format === 'excel') {
+        // Build summary data for multi-sheet export
+        const totalCost = data.reduce((s, r) => {
+          const val = parseFloat(String(r.cost || r.total_cost || 0).replace(/,/g, ''));
+          return s + (isNaN(val) ? 0 : val);
+        }, 0);
+        const sheetsData = {
+          'التقرير الرئيسي': { data, columns, options: { ...options, chartImage } },
+        };
+        const summaryLabel = activeTab === 'breakdown' ? 'التكلفة حسب التصنيف' : 'أعلى الأصناف';
+        await exportMultiSheetExcel(sheetsData, {
+          fileName: options.fileName || 'cost_analysis',
+          title: options.title || 'تحليل التكلفة الشامل',
+          chartImage,
+          summaryData: {
+            headers: ['المؤشر', 'القيمة'],
+            rows: [
+              ['عدد السجلات', String(data.length)],
+              ['إجمالي التكلفة', `${totalCost.toLocaleString()} ج.م`],
+              ['نوع التقرير', summaryLabel],
+              ['النطاق الزمني', options.subtitle || ''],
+            ],
+          },
+        });
+     }
      else if (format === 'word') await exportToWord(data, columns, { ...options, chartImage });
      else if (format === 'pdf') await exportToPDF(data, columns, { ...options, chartImage });
      else return false; // Unknown format — let ExportMenu handle it
@@ -424,7 +451,7 @@ const CostAnalysisPage = () => {
               </table>
             </div>
             <div className="hidden print:block">
-               <PrintableTable title="تحليل التكلفة الشامل" subtitle={`النطاق الزمني: ${timeLabel}`}>
+               <PrintableTable title="تحليل التكلفة الشامل" subtitle={`النطاق الزمني: ${timeLabel}`} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
                   <table className="w-full border-collapse" dir="rtl">
                     <thead>
                       <tr className="bg-slate-200 border-b-2 border-black">
@@ -528,7 +555,7 @@ const CostAnalysisPage = () => {
             </div>
 
             <div className="hidden print:block">
-               <PrintableTable title="أعلى الأصناف استهلاكاً" subtitle={`النطاق الزمني: ${timeLabel} | مرتب حسب: ${sortLabel}`}>
+               <PrintableTable title="أعلى الأصناف استهلاكاً" subtitle={`النطاق الزمني: ${timeLabel} | مرتب حسب: ${sortLabel}`} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
                  <table className="w-full border-collapse" dir="rtl">
                    <thead>
                      <tr className="bg-slate-200 border-b-2 border-black">

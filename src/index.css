@@ -1,5 +1,10 @@
-@import url("https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700;800;900&family=Source+Sans+3:wght@300;400;500;600;700&display=swap");
+/* Fonts loaded via <link> in index.html */
 @import "tailwindcss";
+
+/* ═══ Wire Tailwind v4 dark: variant to [data-theme="dark"] ═══
+   Without this, dark: utilities only fire on OS prefers-color-scheme,
+   not the app's data-theme attribute toggle. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme {
   /* Light Mode Variables (Default - Premium High Contrast) */
@@ -51,10 +56,8 @@
   --color-accent-amber: #d97706;
   --color-accent-amber-bg: #fffbeb;
 
-  --shadow-premium:
-    0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --shadow-card:
-    0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.08);
+  --shadow-premium: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-card: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.08);
   --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
   --shadow-neu: 0 4px 20px rgba(0, 0, 0, 0.04);
   --shadow-neu-hover: 0 10px 30px rgba(0, 0, 0, 0.07);
@@ -137,12 +140,7 @@ html.theme-transitioning {
 html.theme-transitioning *,
 html.theme-transitioning *::before,
 html.theme-transitioning *::after {
-  transition: background-color 0.25s ease !important,
-              border-color 0.25s ease !important,
-              color 0.25s ease !important,
-              box-shadow 0.25s ease !important,
-              fill 0.25s ease !important,
-              stroke 0.25s ease !important;
+  transition: background-color 0.25s ease !important, border-color 0.25s ease !important, color 0.25s ease !important, box-shadow 0.25s ease !important, fill 0.25s ease !important, stroke 0.25s ease !important;
 }
 
 /* ═══ Visibility System (Screen vs Print) ═══ */
@@ -234,14 +232,6 @@ html.theme-transitioning *::after {
     top: -9999px !important;
   }
 
-  .print-simple-header {
-    display: block !important;
-    padding: 10mm 15mm;
-    border-bottom: 3px solid #000;
-    margin-bottom: 10mm;
-    background: white !important;
-  }
-
   /* ═══ Table Header Repetition Fix ═══ */
   table {
     display: table !important; /* Force standard table behavior */
@@ -301,7 +291,6 @@ html.theme-transitioning *::after {
       margin: 10mm 15mm; /* Increased side margins for safety */
     }
     html { font-size: 105% !important; }
-    .print-simple-header { padding: 5mm 10mm; margin-bottom: 5mm; }
     .grid-stats-print { 
       display: grid !important; 
       grid-template-columns: repeat(4, 1fr) !important; 
@@ -469,11 +458,71 @@ html.theme-transitioning *::after {
     margin-top: auto !important;
   }
 
+
   /* Signature section never splits */
   .designer-branding {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
     page-break-before: auto !important;
+  }
+
+  /* ═══ Pivot Reports Page — Direct Print Fix ═══
+     The pivot page uses a 3-column grid (sidebar + 2-col main).
+     The sidebar is already .no-print, but the grid container itself
+     still reserves its columns causing blank space. These rules
+     linearize the layout and ensure the table flows across all pages. */
+
+  .pivot-print-grid {
+    display: block !important;
+    width: 100% !important;
+  }
+
+  .pivot-print-main {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* Override table-layout:fixed which clips pivot columns */
+  .pivot-print-main table {
+    table-layout: auto !important;
+    width: 100% !important;
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+  }
+
+  /* Allow rows to break across pages in pivot tables */
+  .pivot-print-main tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Ensure SyncedTableContainer doesn't clip content */
+  .pivot-print-main .overflow-x-auto,
+  .pivot-print-main [class*="overflow"] {
+    overflow: visible !important;
+    max-width: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* Pivot column headers: smaller font for many columns */
+  .pivot-print-main th {
+    font-size: 8pt !important;
+    padding: 4px 3px !important;
+    white-space: nowrap !important;
+    min-width: 0 !important;
+  }
+
+  .pivot-print-main td {
+    font-size: 8pt !important;
+    padding: 4px 3px !important;
+  }
+
+  /* Pivot tree expand/collapse buttons: hide in print */
+  .pivot-print-main td button {
+    display: none !important;
   }
 }
 
@@ -525,10 +574,10 @@ html.theme-transitioning *::after {
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .neu-card:hover {
-    transform: translateY(-2px);
-    box-shadow:
-      0 20px 25px -5px rgb(0 0 0 / 0.1),
-      0 8px 10px -6px rgb(0 0 0 / 0.1);
+    /* NOTE: no transform here — transform would create a stacking context on
+       hover, trapping absolutely-positioned dropdowns (AutoComplete, ExportMenu)
+       inside the card so they render BEHIND later sibling cards. */
+    box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
   }
 
   .glass-panel {
@@ -557,7 +606,7 @@ html.theme-transitioning *::after {
   .neu-input:focus {
     border-color: var(--color-primary);
     box-shadow: 0 0 0 4px rgba(8, 145, 178, 0.1);
-    background: white;
+    background: var(--color-bg-card);
   }
 
   .neu-select {
@@ -582,11 +631,7 @@ html.theme-transitioning *::after {
   }
 
   .neu-btn-primary {
-    background: linear-gradient(
-      135deg,
-      var(--color-primary),
-      var(--color-primary-dark)
-    );
+    background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
     color: white;
     border: none;
     border-radius: 16px;
@@ -606,11 +651,7 @@ html.theme-transitioning *::after {
   }
 
   .neu-btn-cta {
-    background: linear-gradient(
-      135deg,
-      var(--color-cta),
-      var(--color-cta-dark)
-    );
+    background: linear-gradient(135deg, var(--color-cta), var(--color-cta-dark));
     color: white;
     border: none;
     border-radius: 16px;
@@ -630,11 +671,7 @@ html.theme-transitioning *::after {
   }
 
   .neu-btn-danger {
-    background: linear-gradient(
-      135deg,
-      var(--color-danger),
-      var(--color-danger-dark)
-    );
+    background: linear-gradient(135deg, var(--color-danger), var(--color-danger-dark));
     color: white;
     border: none;
     border-radius: 16px;
@@ -649,11 +686,7 @@ html.theme-transitioning *::after {
   }
 
   .neu-btn-purple {
-    background: linear-gradient(
-      135deg,
-      var(--color-purple),
-      var(--color-purple-dark)
-    );
+    background: linear-gradient(135deg, var(--color-purple), var(--color-purple-dark));
     color: white;
     border: none;
     border-radius: 16px;
@@ -682,11 +715,7 @@ html.theme-transitioning *::after {
     box-shadow: var(--shadow-premium);
   }
   .neu-tab.active {
-    background: linear-gradient(
-      135deg,
-      var(--color-primary),
-      var(--color-primary-dark)
-    );
+    background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
     color: white;
     box-shadow: 0 4px 14px rgba(8, 145, 178, 0.3);
   }
@@ -780,6 +809,48 @@ html.theme-transitioning *::after {
     text-decoration: none;
     color: inherit;
   }
+}
+
+/* ═══ Top Horizontal Pan Strip (pinned under the sticky navbar) ═══
+   A slim horizontal scrollbar that mirrors the document's horizontal
+   scroll, so wide tables can be panned left/right from anywhere on the
+   page without scrolling down to the native bottom scrollbar. */
+/* Height of the full-width top toolbar. Published by TopScrollbar's
+   measureTop (measured live); the fixed Sidebar starts below it. */
+:root {
+  --navbar-h: 80px;
+}
+
+.top-scrollbar {
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
+  transition: opacity 0.2s ease;
+}
+.top-scrollbar-track {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-primary) var(--color-border);
+}
+.top-scrollbar-track::-webkit-scrollbar {
+  height: 10px;
+}
+.top-scrollbar-track::-webkit-scrollbar-track {
+  background: var(--color-border);
+  border-radius: 999px;
+}
+.top-scrollbar-track::-webkit-scrollbar-thumb {
+  background: var(--color-primary);
+  border-radius: 999px;
+  border: 1px solid var(--color-glass-border);
+}
+.top-scrollbar-track::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary-dark);
+}
+
+/* Fully hidden when no container overflows horizontally — the same
+   condition as the native bottom scrollbar. */
+.top-scrollbar-hidden {
+  display: none !important;
 }
 
 .neu-btn-ghost {
@@ -883,6 +954,14 @@ html.theme-transitioning *::after {
   gap: 1rem !important;
 }
 
+/* ── Group Collapse (dispensing pages) ── */
+tr.group-collapsed {
+  display: none !important;
+}
+tr.group-expanded {
+  display: table-row;
+}
+
 /* Print optimizations */
 @media print {
   .no-print {
@@ -952,9 +1031,100 @@ html.theme-transitioning *::after {
     display: block !important;
     visibility: visible !important;
   }
-  
+
   /* Horizontal Signatures Footer in Print */
   /* NOTE: The main .print-footer-unified rules are in the @media print block above
      (lines ~209-219). This block only adds page-break-avoid which is already
      at the .print-footer, .print-footer-unified rule above. No duplicate needed. */
+
+  /* ═══ PrintPreviewModal — Print Structural Rules ═══
+     The dynamic CSS injection in exportPrint.js (a <style> element added
+     right before window.print()) does NOT apply reliably inside the Tauri
+     WebView2 engine, even though it works in Chrome. Everything the modal
+     needs to lay out correctly on paper therefore lives HERE, in the
+     always-loaded global stylesheet, and is activated by the
+     data-print-from-modal attribute that executePrint() sets on <body>.
+     This guarantees the full report + signature footer prints in WebView2. */
+
+  /* ── Turn the full-screen fixed overlay into normal document flow ── */
+  body[data-print-from-modal] div.fixed {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+  body[data-print-from-modal] div.fixed > div {
+    overflow: visible !important;
+  }
+
+  /* ── Preview paper: reset the live-preview zoom transform & clipping ── */
+  body[data-print-from-modal] .print-preview-content {
+    display: block !important;
+    overflow: visible !important;
+    position: relative !important;
+    transform: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+  }
+  body[data-print-from-modal] .print-preview-content > *:first-child {
+    page-break-before: avoid !important;
+    break-before: avoid !important;
+  }
+
+  /* ── Scrollable preview wrapper: don't clip the print flow ── */
+  body[data-print-from-modal] .print-preview-container {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* ── Hide screen-only UI inside the modal ── */
+  body[data-print-from-modal] [class*="print-preview"] .print-preview-toolbar,
+  body[data-print-from-modal] [class*="print-preview"] .no-print {
+    display: none !important;
+  }
+  body[data-print-from-modal] .print-page-number {
+    display: none !important;
+  }
+  body[data-print-from-modal] > div:first-child {
+    page-break-before: avoid !important;
+  }
+
+  /* ── Hide report pages' own footer when printing via the modal ──
+     (the modal renders its own unified signature footer instead) */
+  body[data-print-from-modal] .print-header,
+  body[data-print-from-modal] .print-footer-unified {
+    display: none !important;
+  }
+
+  /* ── Signature footer: always visible, never split across pages ── */
+  .print-preview-content .print-footer-signatures,
+  .print-footer-signatures:not(.print-footer-unified) {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  .print-preview-content .print-footer-signatures > div,
+  .print-footer-signatures:not(.print-footer-unified) > div {
+    flex: 1 1 0 !important;
+    max-width: 33.333% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    text-align: center !important;
+  }
+  .print-footer-signatures > div > p {
+    white-space: normal !important;
+  }
 }

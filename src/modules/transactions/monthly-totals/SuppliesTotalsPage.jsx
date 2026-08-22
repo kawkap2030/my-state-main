@@ -19,12 +19,13 @@ import Card from "../../../components/ui/Card";
 import MonthlyHistoryTable from "../../../components/common/MonthlyHistoryTable";
 import { useGlobalApp } from "../../../context/useGlobalApp";
 import { ToggleLeft, ToggleRight } from "lucide-react";
+import { buildHierarchyLabel } from "../../../utils/reportUtils";
 
 import PrintableTable from '../../../components/common/PrintableTable';
 
 const SuppliesTotalsPage = () => {
   const location = useLocation();
-  const { activeHierarchy, isIsolationExceptionActive, setIsIsolationExceptionActive, lockedLevel, setWorkspaceMode } = useGlobalApp();
+  const { activeHierarchy, workspaceMode, hierarchyNames, isIsolationExceptionActive, setIsIsolationExceptionActive, lockedLevel, setWorkspaceMode } = useGlobalApp();
   
   // Cleanup exception on unmount
   React.useEffect(() => {
@@ -73,7 +74,7 @@ const SuppliesTotalsPage = () => {
   };
 
   return (
-    <PrintableTable title="المنصرف الشهري (مستلزمات طبية)" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="المنصرف الشهري (مستلزمات طبية)" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
     <div className="space-y-6 animate-fadeIn pb-20">
       <div className="no-print space-y-6">
         {/* Premium Header Banner */}
@@ -156,7 +157,7 @@ const SuppliesTotalsPage = () => {
 
               <HierarchySelector
                 onSelectionChange={(data) =>
-                  setHierarchy({ ...hierarchy, ...data })
+                  setHierarchy(prev => ({ ...prev, ...data }))
                 }
                 initialBranch={hierarchy.branchId}
                 initialArea={hierarchy.areaId}

@@ -1,4 +1,4 @@
-# Drug Stats App Implementation
+# منظومة إحصائيات الأدوية والمستلزمات الطبية Implementation
 
 - [ ] Initialize Tauri in the Vite React project
 - [ ] Configure Rust backend and SQLite database connection

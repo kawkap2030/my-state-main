@@ -1,13 +1,13 @@
 import React from 'react';
 import { 
-  User, Mail, Phone, MapPin, Globe, MessageSquare, 
+  Mail, Phone, MapPin, Globe, MessageSquare, 
   Code, Briefcase, GraduationCap, Award, ExternalLink, Calendar,
-  FileText
+  FileText, Code2
 } from 'lucide-react';
 import Breadcrumb from '../../components/ui/Breadcrumb';
 import Card from '../../components/ui/Card';
-import ahmedImage from '../../assets/Ahmed.jpeg';
-import logoImage from '../../assets/logo.png';
+import kawkabIcon from '/kawkab.png';
+import akPhoto from '/ak_photo.png';
 
 const AboutDesignerPage = () => {
   const skills = [
@@ -89,13 +89,13 @@ const AboutDesignerPage = () => {
           <div className="relative group mb-4">
             <div className="absolute inset-0 bg-[var(--color-primary)] rounded-full blur opacity-25 group-hover:opacity-40 transition-opacity" />
             <img 
-              src={ahmedImage} 
+              src={akPhoto} 
               alt="ك/ أحمد علي أحمد" 
               className="relative w-36 h-36 rounded-full object-cover border-4 border-white shadow-xl transition-transform duration-300 group-hover:scale-105"
             />
-            {/* Overlay App Logo */}
-            <div className="absolute bottom-1 left-1 w-10 h-10 rounded-full border-2 border-white bg-white shadow-md p-0.5 overflow-hidden flex items-center justify-center">
-              <img src={logoImage} alt="App Logo" className="w-full h-full object-contain" />
+            {/* Overlay - Kawkab Logo */}
+            <div className="absolute bottom-1 left-1 w-12 h-12 rounded-full border-2 border-white bg-white shadow-md p-1 overflow-hidden flex items-center justify-center">
+              <img src={kawkabIcon} alt="كوكب" className="w-full h-full object-scale-down" />
             </div>
           </div>
 
@@ -230,7 +230,35 @@ const AboutDesignerPage = () => {
               ))}
             </div>
 
-            <div className="text-center mt-10 pt-4 border-t border-[var(--color-border)]">
+            <div className="text-center mt-10 pt-6 border-t border-[var(--color-border)] space-y-4">
+              {/* Kawkab Branding */}
+              <div className="flex items-center justify-center gap-3">
+                <div className="relative flex-shrink-0">
+                  <div className="absolute -inset-2 rounded-xl bg-gradient-to-br from-cyan-400 via-emerald-300 to-cyan-500 opacity-25 blur-md" />
+                  <div className="relative w-14 h-14 rounded-xl overflow-hidden bg-white shadow-md flex items-center justify-center p-1">
+                    <img src={kawkabIcon} alt="كوكب" className="w-full h-full object-scale-down" />
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <Code2 size={13} className="text-[var(--color-primary)]" />
+                    <span className="text-[10px] font-bold text-[var(--color-text-muted)]">من إعداد وتصميم</span>
+                  </div>
+                  <p className="text-sm font-black text-[var(--color-primary)]">كيميائى / أحمد علي أحمد كوكب</p>
+                </div>
+              </div>
+              {/* Contact Info Row */}
+              <div className="flex items-center justify-center gap-5 text-[11px]">
+                <a href="tel:01000314398" className="flex items-center gap-1.5 font-bold text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-colors no-underline">
+                  <Phone size={14} className="text-emerald-500" />
+                  <span dir="ltr">01000314398</span>
+                </a>
+                <span className="text-[var(--color-border)]">|</span>
+                <a href="mailto:a.kawkab2020@gmail.com" className="flex items-center gap-1.5 font-bold text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-colors no-underline">
+                  <Mail size={14} className="text-blue-500" />
+                  <span dir="ltr">a.kawkab2020@gmail.com</span>
+                </a>
+              </div>
               <p className="text-[10px] font-black text-[var(--color-text-muted)] uppercase tracking-wide">
                 حقوق الملكية الفكرية والبرمجية محفوظة للمصمم ك/ أحمد علي أحمد (أحمد كوكب) © ٢٠٢٦
               </p>

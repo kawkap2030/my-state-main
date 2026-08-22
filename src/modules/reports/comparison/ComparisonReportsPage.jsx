@@ -21,13 +21,16 @@ import {
 } from 'recharts';
 import invoke from '../../../api/tauriApi';
 import { useToast } from '../../../components/ui/Toast';
+import { useGlobalApp } from '../../../context/useGlobalApp';
+import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import html2canvas from 'html2canvas';
-import { exportToExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
+import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 
 const COLORS = ['#0891b2', '#7c3aed', '#059669', '#d97706', '#dc2626', '#2563eb', '#db2777'];
 
 const ComparisonReportsPage = () => {
   const toast = useToast();
+  const { workspaceMode, hierarchyNames } = useGlobalApp();
   const [activeTab, setActiveTab] = useState('trend'); // 'trend' or 'entity'
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
@@ -213,7 +216,26 @@ const ComparisonReportsPage = () => {
 
     try {
       if (type === 'excel') {
-        await exportToExcel(data, columns, finalOptions);
+        const totalVal1 = data.reduce((s, r) => s + (r.val1 || 0), 0);
+        const totalVal2 = data.reduce((s, r) => s + (r.val2 || 0), 0);
+        const sheetsData = {
+          'مقارنة الفترات': { data, columns, options: finalOptions },
+        };
+        const periodLabel = options.subtitle || '';
+        await exportMultiSheetExcel(sheetsData, {
+          fileName: finalOptions.fileName || 'comparison_report',
+          title: finalOptions.title || 'تقرير المقارنة الزمنية',
+          chartImage,
+          summaryData: {
+            headers: ['المؤشر', 'القيمة'],
+            rows: [
+              ['عدد العناصر', String(data.length)],
+              ['إجمالي الفترة الأولى', `${totalVal1.toLocaleString()} ج.م`],
+              ['إجمالي الفترة الثانية', `${totalVal2.toLocaleString()} ج.م`],
+              ['الفترة', periodLabel],
+            ],
+          },
+        });
         toast.success('تم تصدير ملف Excel بنجاح ✅');
       } else if (type === 'word') {
         exportToWord(data, columns, finalOptions);
@@ -401,7 +423,7 @@ const ComparisonReportsPage = () => {
                      )}
                      {/* Force vertical layout for selectors inside these boxes by NOT using 'compact' or adding a wrapper if needed */}
                      <div className="hierarchy-comparison-wrapper">
-                        <HierarchySelector compact onSelectionChange={d => setHierarchy1({...hierarchy1, ...d})} initialBranch={hierarchy1.branchId} hideMonth />
+                        <HierarchySelector compact onSelectionChange={d => setHierarchy1(prev => ({...prev, ...d}))} initialBranch={hierarchy1.branchId} hideMonth />
                      </div>
                   </div>
                   
@@ -412,7 +434,7 @@ const ComparisonReportsPage = () => {
                            <p className="text-[11px] font-black text-blue-600 uppercase">الجهة الثانية (ب)</p>
                         </div>
                         <div className="hierarchy-comparison-wrapper">
-                           <HierarchySelector compact onSelectionChange={d => setHierarchy2({...hierarchy2, ...d})} initialBranch={hierarchy2.branchId} hideMonth />
+                           <HierarchySelector compact onSelectionChange={d => setHierarchy2(prev => ({...prev, ...d}))} initialBranch={hierarchy2.branchId} hideMonth />
                         </div>
                      </div>
                   )}
@@ -511,6 +533,7 @@ const ComparisonReportsPage = () => {
                 <PrintableTable
                    title={`تقرير المقارنة - ${currentItemName}`}
                    subtitle={`${activeTab === 'trend' ? 'تحليل تطور زمني' : 'مقارنة بين جهتين'}`}
+                   hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}
                 >
                   <Table 
                      columns={columns} 

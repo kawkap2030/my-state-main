@@ -39,17 +39,20 @@ import Pagination from "../../../components/ui/Pagination";
 import ConfirmModal from "../../../components/ui/ConfirmModal";
 import useKeyboardShortcuts from "../../../hooks/useKeyboardShortcuts";
 import PrintableTable from "../../../components/common/PrintableTable";
+import { buildHierarchyLabel } from "../../../utils/reportUtils";
 import StatsBar from "../../../components/common/StatsBar";
 import ExcelImportWizard from "../../../components/common/ExcelImportWizard";
 import ExportMenu from "../../../components/ui/ExportMenu";
 import { FileSpreadsheet } from "lucide-react";
 import { useAuth } from "../../../context/AuthContext";
+import { executePrint } from "../../../utils/exportPrint";
+import useLockGuard from "../../../hooks/useLockGuard";
 
 const DetailedDrugDispensingPage = () => {
   const toast = useToast();
   const location = useLocation();
   const { user } = useAuth();
-  const { activeHierarchy, checkIsMonthLocked } = useGlobalApp();
+  const { activeHierarchy, hierarchyNames, workspaceMode, checkIsMonthLocked } = useGlobalApp();
   const [hierarchy, setHierarchy] = useState({
     branchId: location.state?.branchId || activeHierarchy.branchId || "",
     areaId: location.state?.areaId || activeHierarchy.areaId || "",
@@ -57,6 +60,7 @@ const DetailedDrugDispensingPage = () => {
     dispenseMonth:
       location.state?.dispenseMonth || activeHierarchy.dispenseMonth || new Date().toISOString().substring(0, 7),
   });
+  const { isLocked: monthLocked, LockBanner } = useLockGuard(hierarchy?.dispenseMonth);
 
   const [categories, setCategories] = useState([]);
   const [drugs, setDrugs] = useState([]);
@@ -109,7 +113,7 @@ const DetailedDrugDispensingPage = () => {
     {
       key: "p",
       ctrl: true,
-      handler: () => window.print(),
+      handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }),
       description: "طباعة",
     },
     {
@@ -290,7 +294,27 @@ const DetailedDrugDispensingPage = () => {
     return displayHistory.slice(startIndex, startIndex + rowsPerPage);
   }, [displayHistory, currentPage, rowsPerPage]);
 
-  const groupedRows = useMemo(() => {
+    // ── Collapse/Expand Groups ────────────────────────────────────────────
+  const STORAGE_KEY = 'collapsed-drug-dispensing';
+  const [collapsedGroups, setCollapsedGroups] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch { return new Set(); }
+  });
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...collapsedGroups]));
+  }, [collapsedGroups]);
+  const toggleGroup = useCallback((name) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+
+const groupedRows = useMemo(() => {
     let prevCat = '';
     const rows = [];
     // Count items per category
@@ -400,26 +424,6 @@ const DetailedDrugDispensingPage = () => {
   }, [paginatedHistory, checkIsMonthLocked, editingId, editFormData, collapsedGroups, toggleGroup]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalPages = Math.ceil(displayHistory.length / rowsPerPage);
-
-  // ── Collapse/Expand Groups ────────────────────────────────────────────
-  const STORAGE_KEY = 'collapsed-drug-dispensing';
-  const [collapsedGroups, setCollapsedGroups] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch { return new Set(); }
-  });
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...collapsedGroups]));
-  }, [collapsedGroups]);
-  const toggleGroup = useCallback((name) => {
-    setCollapsedGroups(prev => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  }, []);
 
   // Export columns for history table
   const exportColumns = useMemo(() => [
@@ -770,12 +774,14 @@ const DetailedDrugDispensingPage = () => {
         />
 
         <HierarchySelector
-          onSelectionChange={(data) => setHierarchy({ ...hierarchy, ...data })}
+          onSelectionChange={(data) => setHierarchy(prev => ({ ...prev, ...data }))}
           initialBranch={hierarchy.branchId}
           initialArea={hierarchy.areaId}
           initialClinic={hierarchy.clinicId}
           initialMonth={hierarchy.dispenseMonth}
         />
+
+        <LockBanner />
 
         <div className="flex bg-[var(--color-bg-card)] p-1 rounded-xl border border-[var(--color-border)] self-start max-w-xs">
           <button
@@ -818,7 +824,7 @@ const DetailedDrugDispensingPage = () => {
                 type="button"
                 icon={History}
                 onClick={handleCopyPreviousMonth}
-                disabled={checkIsMonthLocked(hierarchy.dispenseMonth) || !hierarchy.branchId}
+                disabled={monthLocked || !hierarchy.branchId}
                 className="text-xs px-4"
               >
                 نسخ من الشهر السابق
@@ -842,6 +848,7 @@ const DetailedDrugDispensingPage = () => {
                   }
                   required
                   data-focus="first-input"
+                  disabled={monthLocked}
                 />
                 <AutoComplete
                   label="الدواء"
@@ -851,7 +858,7 @@ const DetailedDrugDispensingPage = () => {
                     setFormData({ ...formData, drugId: val })
                   }
                   placeholder="ابحث عن دواء..."
-                  disabled={!formData.categoryId}
+                  disabled={!formData.categoryId || monthLocked}
                 />
               </div>
 
@@ -866,6 +873,7 @@ const DetailedDrugDispensingPage = () => {
                     setFormData({ ...formData, quantity: e.target.value })
                   }
                   required
+                  disabled={monthLocked}
                 />
                 <Input
                   label="عدد الحالات"
@@ -876,6 +884,7 @@ const DetailedDrugDispensingPage = () => {
                     setFormData({ ...formData, casesCount: e.target.value })
                   }
                   required
+                  disabled={monthLocked}
                 />
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -899,6 +908,7 @@ const DetailedDrugDispensingPage = () => {
                           }
                         }}
                         value=""
+                        disabled={monthLocked}
                       >
                         <option value="" disabled>
                           أسعار سابقة...
@@ -920,6 +930,7 @@ const DetailedDrugDispensingPage = () => {
                     }
                     required
                     inputClassName="py-3"
+                    disabled={monthLocked}
                   />
                 </div>
               </div>
@@ -954,16 +965,16 @@ const DetailedDrugDispensingPage = () => {
                   variant="ghost"
                   type="submit"
                   icon={
-                    checkIsMonthLocked(hierarchy.dispenseMonth)
+                    monthLocked
                       ? Lock
                       : ShoppingCart
                   }
                   disabled={
-                    checkIsMonthLocked(hierarchy.dispenseMonth)
+                    monthLocked
                   }
                   className="flex-1 py-4 text-lg border-2 border-dashed border-primary text-primary hover:bg-primary hover:text-white transition-all shadow-sm"
                 >
-                  {checkIsMonthLocked(hierarchy.dispenseMonth)
+                  {monthLocked
                     ? "الشهر مقفل"
                     : "إضافة للقائمة الفرعية"}
                 </Button>
@@ -1058,18 +1069,18 @@ const DetailedDrugDispensingPage = () => {
               <Button
                 variant="primary"
                 icon={
-                  checkIsMonthLocked(hierarchy.dispenseMonth)
+                  monthLocked
                     ? Lock
                     : Save
                 }
                 className="flex-1 py-4 rounded-2xl shadow-xl"
                 loading={savingAll}
                 disabled={
-                  checkIsMonthLocked(hierarchy.dispenseMonth)
+                  monthLocked
                 }
                 onClick={handleSaveAll}
               >
-                {checkIsMonthLocked(hierarchy.dispenseMonth)
+                {monthLocked
                   ? "الشهر مقفل"
                   : "✓ اعتماد وحفظ قائمة الصرف"}
               </Button>
@@ -1242,9 +1253,8 @@ const DetailedDrugDispensingPage = () => {
           <div className="hidden print:block">
             <PrintableTable
               title="تقرير صرف الأدوية التفصيلي"
-              subtitle={`الشهر: ${hierarchy.dispenseMonth} - الفرع: ${
-                activeHierarchy.branchName || "جميع الفروع"
-              }`}
+              subtitle={`الشهر: ${hierarchy.dispenseMonth}`}
+              hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}
             >
               <table className="w-full text-right border-collapse border border-black text-[10px]">
                 <thead>

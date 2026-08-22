@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import invoke from '../../api/tauriApi';
 import { 
-  Package, Tag, Layers, ArrowRight, Save, 
+  Package, Tag, Layers, ArrowRight, Save, Lock,
   Trash2, Plus, DollarSign, Calculator, Loader2, RotateCcw
 } from 'lucide-react';
 import Button from '../ui/Button';
@@ -10,12 +10,11 @@ import Input from '../ui/Input';
 import Select from '../ui/Select';
 import AutoComplete from '../ui/AutoComplete';
 import { useToast } from '../ui/Toast';
-import { useGlobalApp } from '../../context/useGlobalApp';
+import useLockGuard from '../../hooks/useLockGuard';
 import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts';
-import { Lock } from 'lucide-react';
 
 const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdit }) => {
-  const { checkIsMonthLocked } = useGlobalApp();
+  const { isLocked: monthLocked, LockBanner } = useLockGuard(hierarchy?.dispenseMonth);
   const toast = useToast();
   const [mode, setMode] = useState('supply'); // 'supply' or 'category'
   const [categories, setCategories] = useState([]);
@@ -155,12 +154,15 @@ const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdi
 
   return (
     <form onSubmit={handleSave} className="space-y-8 animate-fadeIn">
+      <LockBanner />
+      
       {/* Mode Switcher */}
       <div className="bg-[var(--color-bg)] p-1.5 rounded-2xl flex items-center gap-2 max-w-sm border border-[var(--color-border)]">
         <button
           type="button"
           onClick={() => setMode('supply')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black transition-all ${
+          disabled={monthLocked}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
             mode === 'supply' 
               ? 'bg-[var(--color-bg-card)] text-[var(--color-info)] shadow-sm' 
               : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
@@ -172,7 +174,8 @@ const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdi
         <button
           type="button"
           onClick={() => setMode('category')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black transition-all ${
+          disabled={monthLocked}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
             mode === 'category' 
               ? 'bg-[var(--color-bg-card)] text-[var(--color-info)] shadow-sm' 
               : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
@@ -195,6 +198,7 @@ const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdi
                 onChange={(val) => setFormData({ ...formData, supply_id: val })}
                 placeholder="ابحث عن مستلزم..."
                 getOptionLabel={(opt) => `${opt.name} (${categories.find(c => c.id === opt.category_id)?.name || '---'})`}
+                disabled={monthLocked}
               />
             </div>
           ) : (
@@ -206,6 +210,7 @@ const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdi
                 onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
                 placeholder="اختر التصنيف..."
                 className="w-full"
+                disabled={monthLocked}
               />
             </div>
           )}
@@ -220,8 +225,8 @@ const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdi
                   value={formData.consumer_value}
                   onChange={(e) => setFormData({ ...formData, consumer_value: e.target.value })}
                   placeholder="0.00"
-                  disabled={mode !== 'supply'}
-                  className={`w-full bg-[var(--color-bg)] border-none outline-none p-4 rounded-2xl text-xl font-black text-center text-[var(--color-text)] transition-all ${mode === 'supply' ? 'focus:ring-2 focus:ring-[var(--color-info)]/20' : 'opacity-50 cursor-not-allowed grayscale'}`}
+                  disabled={mode !== 'supply' || monthLocked}
+                  className={`w-full bg-[var(--color-bg)] border-none outline-none p-4 rounded-2xl text-xl font-black text-center text-[var(--color-text)] transition-all ${mode === 'supply' && !monthLocked ? 'focus:ring-2 focus:ring-[var(--color-info)]/20' : 'opacity-50 cursor-not-allowed grayscale'}`}
                 />
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-[var(--color-text-muted)]">ج.م</span>
               </div>
@@ -235,8 +240,8 @@ const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdi
                   value={formData.collective_entities_value}
                   onChange={(e) => setFormData({ ...formData, collective_entities_value: e.target.value })}
                   placeholder="0.00"
-                  disabled={mode !== 'category'}
-                  className={`w-full bg-[var(--color-bg)] border-none outline-none p-4 rounded-2xl text-xl font-black text-center text-[var(--color-text)] transition-all ${mode === 'category' ? 'focus:ring-2 focus:ring-[var(--color-info)]/20' : 'opacity-50 cursor-not-allowed grayscale'}`}
+                  disabled={mode !== 'category' || monthLocked}
+                  className={`w-full bg-[var(--color-bg)] border-none outline-none p-4 rounded-2xl text-xl font-black text-center text-[var(--color-text)] transition-all ${mode === 'category' && !monthLocked ? 'focus:ring-2 focus:ring-[var(--color-info)]/20' : 'opacity-50 cursor-not-allowed grayscale'}`}
                 />
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-[var(--color-text-muted)]">ج.م</span>
               </div>
@@ -251,7 +256,8 @@ const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdi
             <textarea
               value={formData.notes}
               onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-              className="w-full bg-[var(--color-bg)] border-none outline-none p-4 rounded-2xl text-sm font-bold text-[var(--color-text)] h-[100px] resize-none focus:ring-2 focus:ring-[var(--color-info)]/20 transition-all"
+              disabled={monthLocked}
+              className="w-full bg-[var(--color-bg)] border-none outline-none p-4 rounded-2xl text-sm font-bold text-[var(--color-text)] min-h-[100px] resize-y focus:ring-2 focus:ring-[var(--color-info)]/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               placeholder="اكتب أي ملاحظات هنا..."
             />
           </div>
@@ -277,6 +283,7 @@ const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdi
           variant="secondary" 
           onClick={resetForm}
           icon={RotateCcw}
+          disabled={monthLocked}
           className="px-8 py-4 rounded-2xl text-lg border border-[var(--color-border)]"
         >
           تفريغ
@@ -295,11 +302,11 @@ const DetailedSuppliesForm = ({ hierarchy, onSuccess, currentRecord, onCancelEdi
           type="submit" 
           variant="primary" 
           loading={saving}
-          icon={checkIsMonthLocked(hierarchy.dispenseMonth) ? Lock : Save}
-          disabled={checkIsMonthLocked(hierarchy.dispenseMonth)}
-          className={`px-12 py-4 rounded-2xl text-lg shadow-xl ${checkIsMonthLocked(hierarchy.dispenseMonth) ? 'opacity-50 grayscale' : (currentRecord ? 'shadow-amber-100 bg-amber-500 hover:bg-amber-600' : 'shadow-blue-100')}`}
+          icon={monthLocked ? Lock : Save}
+          disabled={monthLocked}
+          className={`px-12 py-4 rounded-2xl text-lg shadow-xl ${monthLocked ? 'opacity-50 grayscale' : (currentRecord ? 'shadow-amber-100 bg-amber-500 hover:bg-amber-600' : 'shadow-blue-100')}`}
         >
-          {checkIsMonthLocked(hierarchy.dispenseMonth) ? 'الشهر مقفل' : (currentRecord ? 'تحديث السجل' : 'حفظ السجل')}
+          {monthLocked ? 'الشهر مقفل' : (currentRecord ? 'تحديث السجل' : 'حفظ السجل')}
         </Button>
       </div>
     </form>

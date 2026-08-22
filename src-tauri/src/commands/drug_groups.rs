@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use crate::db::AppState;
-use crate::commands::month_isolation::{enforce_isolation_lock, get_branch_id_from_clinic};
+use crate::commands::month_isolation::{
+    enforce_isolation_lock, enforce_isolation_lock_guard, cleanup_isolation_lock_if_empty,
+    get_branch_id_from_clinic,
+};
 use rusqlite::OptionalExtension;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -131,7 +134,27 @@ pub fn save_drug_group_costs_bulk(state: State<'_, AppState>, data: Vec<DrugGrou
     let mut skipped_names = Vec::new();
 
     for item in data {
-        if item.cost <= 0.0 { continue; }
+        // Invalid costs are reported (not silently dropped) so the user sees why
+        // a group was skipped.
+        if item.cost <= 0.0 {
+            skipped_names.push(format!("{} (قيمة غير صالحة)", item.name));
+            continue;
+        }
+
+        // Bulk edit: item.id is set when the frontend loaded an existing row.
+        // Update it in place instead of skipping it.
+        if let Some(existing_row_id) = item.id {
+            tx.execute(
+                "UPDATE drug_groups SET 
+                    name = ?1, cost = ?2, clinic_id = ?3, area_id = ?4, dispense_month = ?5, group_code_id = ?6, branch_id = ?7
+                 WHERE id = ?8",
+                rusqlite::params![
+                    item.name, item.cost, item.clinic_id, item.area_id, item.dispense_month, item.group_code_id, branch_id, existing_row_id
+                ],
+            ).map_err(|e| e.to_string())?;
+            saved_count += 1;
+            continue;
+        }
 
         let existing_id: Option<i32> = tx.query_row(
             "SELECT id FROM drug_groups 
@@ -148,8 +171,8 @@ pub fn save_drug_group_costs_bulk(state: State<'_, AppState>, data: Vec<DrugGrou
         ).optional().unwrap_or(None);
 
         if existing_id.is_some() {
-            // It's a duplicate. We skip updating to prevent silent overwrites in bulk mode.
-            skipped_names.push(item.name.clone());
+            // Genuine duplicate in bulk mode — reported, not silently overwritten.
+            skipped_names.push(format!("{} (مسجل مسبقاً)", item.name));
         } else {
             // Insert new record
             tx.execute(
@@ -333,7 +356,26 @@ pub fn delete_drug_group(state: State<'_, AppState>, id: i32) -> Result<(), Stri
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    let rec: Option<(i32, Option<i32>, Option<i32>, String)> = conn.query_row(
+        "SELECT branch_id, area_id, clinic_id, dispense_month 
+         FROM drug_groups WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional().map_err(|e| e.to_string())?;
+
+    let (branch_id, area_id, clinic_id, dispense_month) = match rec {
+        Some(r) => r,
+        None => return Err("السجل غير موجود".to_string()),
+    };
+
+    let current_level = if clinic_id.is_some() { "clinic" }
+                        else if area_id.is_some() { "area" }
+                        else { "branch" };
+    enforce_isolation_lock_guard(conn, branch_id, &dispense_month, current_level)?;
+
     conn.execute("DELETE FROM drug_groups WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
+
+    cleanup_isolation_lock_if_empty(conn, branch_id, &dispense_month)?;
     Ok(())
 }

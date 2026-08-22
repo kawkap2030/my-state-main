@@ -33,12 +33,13 @@ const PrintableTable = ({
   showSignatures = true,
   hierarchyLabel = '',
   children,
+  signatures: propSignatures = null, // optional override from parent
 }) => {
   const { signatures } = useReportSignatures();
   const { presets } = useExportPresets();
-  // Prefer default preset from export_presets (multi-preset system), fall back to report_signatures
+  // Priority: propSignatures (from ExportMenu) > defaultPreset (from useExportPresets) > useReportSignatures hook
   const defaultPreset = presets.find(p => p.is_default);
-  const effectiveSignatures = {
+  const effectiveSignatures = propSignatures || {
     preparerName: defaultPreset?.preparer_name || signatures.preparerName || '',
     managerName: defaultPreset?.manager_name || signatures.managerName || '',
     approvalNumber: defaultPreset?.approval_number || signatures.approvalNumber || '',

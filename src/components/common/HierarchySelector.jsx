@@ -1,48 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Building2, MapPin, Hospital, Calendar, Layers, Lock } from 'lucide-react';
+import { Building2, MapPin, Hospital, Layers, Lock } from 'lucide-react';
 import invoke from '../../api/tauriApi';
 import { useGlobalApp } from '../../context/useGlobalApp';
 import AutoComplete from '../ui/AutoComplete';
-
-const ENGLISH_MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December'
-];
-
-const MonthInput = ({ value, onChange }) => {
-  const inputRef = useRef();
-  
-  const formatMonth = (monthStr) => {
-    if (!monthStr) return '';
-    const [year, month] = monthStr.split('-');
-    if (!year || !month) return monthStr;
-    const monthIndex = parseInt(month, 10) - 1;
-    if (monthIndex < 0 || monthIndex > 11) return monthStr;
-    return `${ENGLISH_MONTHS[monthIndex]} ${year}`;
-  };
-
-  return (
-    <div 
-      className="flex items-center gap-3 p-2 px-4 rounded-2xl bg-[var(--color-bg)] border border-[var(--color-border)] shadow-sm cursor-pointer hover:border-[var(--color-primary)] transition-all relative group"
-      onClick={() => inputRef.current?.showPicker()}
-    >
-      <Calendar size={18} className="text-[var(--color-primary)] group-hover:scale-110 transition-transform" />
-      <span className="text-sm font-black text-[var(--color-text)]">
-        {formatMonth(value) || '--------'}
-      </span>
-      <input
-        ref={inputRef}
-        type="month"
-        value={value}
-        onChange={onChange}
-        className="absolute top-0 left-0 w-0 h-0 opacity-0 pointer-events-none"
-      />
-    </div>
-  );
-};
+import MonthInput from '../ui/MonthInput';
 
 const HierarchySelector = ({ 
   onSelectionChange, 
+  onChange,
   initialBranch, 
   initialArea, 
   initialClinic, 
@@ -71,32 +36,41 @@ const HierarchySelector = ({
   const [selectedClinic, setSelectedClinic] = useState(initialClinic !== undefined ? initialClinic : activeHierarchy.clinicId);
   const [dispenseMonth, setDispenseMonth] = useState(initialMonth !== undefined ? initialMonth : activeHierarchy.dispenseMonth);
 
-  // Sync with initial props ONLY IF they are explicitly provided (e.g. from a deep link or direct navigation state)
-  // Use setTimeout to defer state updates — satisfies react-hooks/set-state-in-effect
+  // ── One-way sync from externally-changed initial props ───────────
+  const lastAppliedInitialRef = useRef({ branch: initialBranch, area: initialArea, clinic: initialClinic, month: initialMonth });
+
   useEffect(() => {
     const t = setTimeout(() => {
-      if (initialBranch !== undefined && String(initialBranch ?? '') !== String(selectedBranch ?? '')) {
+      const last = lastAppliedInitialRef.current;
+      if (initialBranch !== undefined && String(initialBranch ?? '') !== String(last.branch ?? '')) {
         setSelectedBranch(initialBranch);
       }
-      if (initialArea !== undefined && String(initialArea ?? '') !== String(selectedArea ?? '')) {
+      if (initialArea !== undefined && String(initialArea ?? '') !== String(last.area ?? '')) {
         setSelectedArea(initialArea);
       }
-      if (initialClinic !== undefined && String(initialClinic ?? '') !== String(selectedClinic ?? '')) {
+      if (initialClinic !== undefined && String(initialClinic ?? '') !== String(last.clinic ?? '')) {
         setSelectedClinic(initialClinic);
       }
-      if (initialMonth !== undefined && String(initialMonth ?? '') !== String(dispenseMonth ?? '')) {
+      if (initialMonth !== undefined && String(initialMonth ?? '') !== String(last.month ?? '')) {
         setDispenseMonth(initialMonth);
       }
+      lastAppliedInitialRef.current = { branch: initialBranch, area: initialArea, clinic: initialClinic, month: initialMonth };
     }, 0);
     return () => clearTimeout(t);
-  }, [initialBranch, initialArea, initialClinic, initialMonth, selectedBranch, selectedArea, selectedClinic, dispenseMonth]);
+  }, [initialBranch, initialArea, initialClinic, initialMonth]);
 
   // ── Ref-based callbacks to avoid dependency cycles ──────────────
+  const workspaceModeRef = useRef(workspaceMode);
+  useEffect(() => { workspaceModeRef.current = workspaceMode; });
+
   const updateHierarchyRef = useRef(updateActiveHierarchy);
   useEffect(() => { updateHierarchyRef.current = updateActiveHierarchy; });
 
   const onSelectionChangeRef = useRef(onSelectionChange);
   useEffect(() => { onSelectionChangeRef.current = onSelectionChange; });
+
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; });
 
   const setHierarchyNamesRef = useRef(setHierarchyNames);
   useEffect(() => { setHierarchyNamesRef.current = setHierarchyNames; });
@@ -125,10 +99,11 @@ const HierarchySelector = ({
         });
         setLockedLevel(level);
         
-        // If locked, force workspace mode (Unless Exception is Active)
+        // If locked, force workspace mode (Unless Exception is Active) — read via ref so
+        // setting the mode doesn't re-trigger this effect (avoids an extra fetch cycle).
         if (level && !isIsolationExceptionActive) {
           const mode = level === 'branch' ? 'branches' : level === 'area' ? 'areas' : 'clinics';
-          if (workspaceMode !== mode) {
+          if (workspaceModeRef.current !== mode) {
             setWorkspaceMode(mode);
           }
         }
@@ -137,7 +112,7 @@ const HierarchySelector = ({
       }
     };
     fetchLock();
-  }, [selectedBranch, dispenseMonth, setLockedLevel, setWorkspaceMode, workspaceMode, isIsolationExceptionActive]);
+  }, [selectedBranch, dispenseMonth, setLockedLevel, setWorkspaceMode, isIsolationExceptionActive]);
 
   // Clear sub-levels when mode changes to prevent data overlap
   useEffect(() => {
@@ -196,18 +171,33 @@ const HierarchySelector = ({
     }
   }, [selectedArea]);
 
+  // Fire the parent callback ONLY when the actual selection changes — NOT when the
+  // branches/areas/clinics lists finish loading (previously each list load re-fired
+  // onSelectionChange → parent re-render → new props → cascading renders and failed loads).
   useEffect(() => {
+    const payload = {
+      level: workspaceMode === 'branches' ? 'branch' : workspaceMode === 'areas' ? 'area' : 'clinic',
+      branchId: selectedBranch ? parseInt(selectedBranch) : null,
+      areaId: selectedArea ? parseInt(selectedArea) : null,
+      clinicId: selectedClinic ? parseInt(selectedClinic) : null,
+      dispenseMonth,
+    };
     if (onSelectionChangeRef.current) {
-      onSelectionChangeRef.current({
-        level: workspaceMode === 'branches' ? 'branch' : workspaceMode === 'areas' ? 'area' : 'clinic',
-        branchId: selectedBranch ? parseInt(selectedBranch) : null,
-        areaId: selectedArea ? parseInt(selectedArea) : null,
-        clinicId: selectedClinic ? parseInt(selectedClinic) : null,
+      onSelectionChangeRef.current(payload);
+    }
+    if (onChangeRef.current) {
+      onChangeRef.current({
+        branchId: selectedBranch ? String(selectedBranch) : '',
+        areaId: selectedArea ? String(selectedArea) : '',
+        clinicId: selectedClinic ? String(selectedClinic) : '',
         dispenseMonth,
       });
     }
+  }, [workspaceMode, selectedBranch, selectedArea, selectedClinic, dispenseMonth]);
 
-    // Update global context for print/exports
+  // Update global context names (print/exports) — separate effect so list loading never
+  // triggers the parent callback.
+  useEffect(() => {
     const bName = branches.find(b => String(b.id) === String(selectedBranch))?.name || '';
     const aName = areas.find(a => String(a.id) === String(selectedArea))?.name || '';
     const cName = clinics.find(c => String(c.id) === String(selectedClinic))?.name || '';
@@ -217,12 +207,12 @@ const HierarchySelector = ({
       area: aName,
       clinic: cName
     });
-  }, [workspaceMode, selectedBranch, selectedArea, selectedClinic, dispenseMonth, branches, areas, clinics]);
+  }, [selectedBranch, selectedArea, selectedClinic, branches, areas, clinics]);
 
   return (
     <div className={`neu-card ${compact ? 'p-4 md:p-5' : 'p-6 md:p-8'}`} dir="rtl">
       {/* Header Info */}
-      <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 ${compact ? 'mb-4' : 'mb-6'}`}>
+      <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 flex-wrap ${compact ? 'mb-4' : 'mb-6'}`}>
         <div className="flex items-center gap-3">
           <div className="w-1.5 h-8 rounded-full bg-[var(--color-primary)]" />
           <div>
@@ -249,16 +239,18 @@ const HierarchySelector = ({
           <MonthInput 
             value={dispenseMonth}
             onChange={(e) => setDispenseMonth(e.target.value)}
+            className="w-auto shrink-0"
           />
         )}
       </div>
 
       <div className={`w-full h-[1px] bg-[var(--color-border)] opacity-50 ${compact ? 'mb-4' : 'mb-8'}`}></div>
 
-      {/* Selectors Grid */}
-      <div className="flex flex-col md:flex-row gap-6">
+      {/* Selectors Grid — wraps into multiple rows when the container is narrow
+          (e.g. a 25% sidebar) so boxes never shrink below a usable width. */}
+      <div className="flex flex-col md:flex-row flex-wrap gap-4 md:gap-6">
         {/* Branch - Always visible */}
-        <div className="flex-1 space-y-2">
+        <div className="flex-1 min-w-[200px] space-y-2">
           <AutoComplete
             value={selectedBranch}
             onChange={setSelectedBranch}
@@ -271,7 +263,7 @@ const HierarchySelector = ({
 
         {/* Area - Visible in Area or Clinic mode */}
         {(workspaceMode === 'areas' || workspaceMode === 'clinics') && (
-          <div className="flex-1 space-y-2 animate-fadeIn">
+          <div className="flex-1 min-w-[200px] space-y-2 animate-fadeIn">
             <AutoComplete
               value={selectedArea}
               onChange={setSelectedArea}
@@ -286,7 +278,7 @@ const HierarchySelector = ({
 
         {/* Clinic - Only in Clinic mode */}
         {workspaceMode === 'clinics' && (
-          <div className="flex-1 space-y-2 animate-fadeIn">
+          <div className="flex-1 min-w-[200px] space-y-2 animate-fadeIn">
             <AutoComplete
               value={selectedClinic}
               onChange={setSelectedClinic}

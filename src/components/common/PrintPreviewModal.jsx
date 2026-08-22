@@ -11,18 +11,19 @@
  *   - Zoom slider
  *   - Live preview of the report content
  */
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X, Printer, ZoomIn, ZoomOut, LayoutTemplate,
   Type, AlignLeft, Hash, Signature, ChevronDown,
-  Monitor, Smartphone, FileDown, Edit3
+  Monitor, Smartphone, FileDown, Edit3, User, ShieldCheck,
+  Save, Bookmark, Star, Check, Trash2, Plus
 } from 'lucide-react';
 import { executePrint } from '../../utils/exportPrint';
 import { exportToPDF } from '../../utils/exportPdf';
 import { useToast } from '../ui/Toast';
-import SignatureSettingsModal from './SignatureSettingsModal';
-import useReportSignatures from '../../hooks/useReportSignatures';
 import useExportPresets from '../../hooks/useExportPresets';
+import { extractSignaturesFromPresets } from '../../hooks/useReportSignatures';
+import invoke from '../../api/tauriApi';
 
 const MARGIN_PRESETS = {
   narrow: { top: 5, bottom: 5, left: 5, right: 5, label: 'ضيق', desc: '5 مم' },
@@ -49,19 +50,148 @@ const PrintPreviewModal = ({
   const [showSignatures, setShowSignatures] = useState(true);
   const [zoom, setZoom] = useState(55);
   const [pdfExporting, setPdfExporting] = useState(false);
-  const [showSignatureSettings, setShowSignatureSettings] = useState(false);
+  const [showSignaturePanel, setShowSignaturePanel] = useState(false);
+  const [localPreparerName, setLocalPreparerName] = useState('');
+  const [localManagerName, setLocalManagerName] = useState('');
+  const [localApprovalNumber, setLocalApprovalNumber] = useState('');
+  const [sigSaving, setSigSaving] = useState(false);
+  const [sigToast, setSigToast] = useState('');
+  const [showSaveAsNew, setShowSaveAsNew] = useState(false);
+  const [newPresetName, setNewPresetName] = useState('');
   const previewRef = useRef(null);
   const toast = useToast();
 
-  // Load signatures directly so they update immediately after saving via SignatureSettingsModal
-  const { signatures: dbSignatures, loadSignatures } = useReportSignatures();
-  const { presets } = useExportPresets();
-  // Prefer default preset from export_presets, then hook data, then prop
+  const {
+    presets,
+    savePreset: saveExportPreset,
+    getPresetById,
+    presetToSettings,
+    canDelete,
+    deletePreset,
+    activePresetId,
+    setActivePresetId,
+  } = useExportPresets();
+
+  // ── Load signatures into React state when modal opens ───────────────
+  // This is the KEY fix: by storing in React state (not DOM manipulation),
+  // React reconciliation preserves the names during re-renders.
+  const [printSigs, setPrintSigs] = useState(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setPrintSigs(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadSigs = async () => {
+      try {
+        const presetsData = await Promise.race([
+          invoke('get_export_presets', { userId: null, isAdmin: true }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000)),
+        ]);
+        if (cancelled) return;
+        const sigs = extractSignaturesFromPresets(presetsData);
+        if (sigs && (sigs.preparerName || sigs.managerName || sigs.approvalNumber)) {
+          setPrintSigs(sigs);
+        }
+      } catch (_) {}
+    };
+
+    loadSigs();
+    return () => { cancelled = true; };
+  }, [isOpen]);
+
   const defaultPreset = presets.find(p => p.is_default);
   const mergedSignatures = {
-    preparerName: defaultPreset?.preparer_name || dbSignatures.preparerName || signatures.preparerName || '',
-    managerName: defaultPreset?.manager_name || dbSignatures.managerName || signatures.managerName || '',
-    approvalNumber: defaultPreset?.approval_number || dbSignatures.approvalNumber || signatures.approvalNumber || '',
+    preparerName: printSigs?.preparerName || defaultPreset?.preparer_name || signatures.preparerName || '',
+    managerName: printSigs?.managerName || defaultPreset?.manager_name || signatures.managerName || '',
+    approvalNumber: printSigs?.approvalNumber || defaultPreset?.approval_number || signatures.approvalNumber || '',
+  };
+
+  // Sync local signature fields only when panel OPENS (not on every data change)
+  useEffect(() => {
+    if (showSignaturePanel) {
+      setLocalPreparerName(mergedSignatures.preparerName);
+      setLocalManagerName(mergedSignatures.managerName);
+      setLocalApprovalNumber(mergedSignatures.approvalNumber);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSignaturePanel]);
+
+
+
+  // ── Save signature + preset from inline panel ────────────────────────
+  const handleSignaturesInlineSave = async () => {
+    if (!localPreparerName.trim()) return;
+    setSigSaving(true);
+    try {
+      await saveExportPreset({
+        name: 'التوقيع الافتراضي',
+        scope: 'public',
+        orientation,
+        marginPreset,
+        showPageNumbers,
+        showSignatures,
+        preparerName: localPreparerName,
+        managerName: localManagerName,
+        approvalNumber: localApprovalNumber,
+        isDefault: true,
+      });
+      setSigToast('✅ تم حفظ التوقيع الرقمي');
+      setTimeout(() => setSigToast(''), 2000);
+    } catch (err) {
+      setSigToast('❌ فشل الحفظ: ' + (err.message || err));
+    } finally {
+      setSigSaving(false);
+    }
+  };
+
+  // ── Load a preset into the signature fields ──────────────────────────
+  const handleInlinePresetSelect = (presetId) => {
+    const preset = getPresetById(presetId);
+    if (preset) {
+      const settings = presetToSettings(preset);
+      if (settings) {
+        setLocalPreparerName(settings.signatures?.preparerName || '');
+        setLocalManagerName(settings.signatures?.managerName || '');
+        setLocalApprovalNumber(settings.signatures?.approvalNumber || '');
+      }
+      setActivePresetId(presetId);
+      setSigToast(`تم تحميل: ${preset.name}`);
+      setTimeout(() => setSigToast(''), 2000);
+    }
+  };
+
+  // ── Save current signature as a NEW named preset ──────────────────────
+  // NOTE: savePreset in useExportPresets already calls loadPresets() internally,
+  // so we do NOT need a redundant loadPresets() call here.
+  const handleSaveAsNewPreset = async () => {
+    if (!newPresetName.trim() || !localPreparerName.trim()) return;
+    setSigSaving(true);
+    const savedName = newPresetName.trim();
+    try {
+      await saveExportPreset({
+        name: savedName,
+        scope: 'private',
+        orientation,
+        marginPreset,
+        showPageNumbers,
+        showSignatures,
+        preparerName: localPreparerName,
+        managerName: localManagerName,
+        approvalNumber: localApprovalNumber,
+        isDefault: false,
+      });
+      setNewPresetName('');
+      setShowSaveAsNew(false);
+      setSigToast(`✅ تم الحفظ كـ "${savedName}"`);
+      setTimeout(() => setSigToast(''), 2000);
+    } catch (err) {
+      setSigToast('❌ فشل الحفظ');
+    } finally {
+      setSigSaving(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -69,20 +199,24 @@ const PrintPreviewModal = ({
   const margins = MARGIN_PRESETS[marginPreset];
 
   const handlePrint = () => {
+    // Signatures are already in React state (loaded by useEffect when modal opens)
+    // and rendered via mergedSignatures in JSX. No DOM manipulation needed.
     const printSettings = {
       orientation,
       fontSize,
       margins: marginPreset,
       showPageNumbers,
       showSignatures,
+      fromModal: true,
     };
 
     if (onPrint) {
       onPrint(printSettings);
     } else {
-      executePrint(printSettings);
+      executePrint(printSettings, () => {
+        onClose();
+      });
     }
-    onClose();
   };
 
   // Paper dimensions in mm based on orientation
@@ -103,7 +237,6 @@ const PrintPreviewModal = ({
     borderRadius: '2px',
     padding: `${margins.top}mm ${margins.right}mm ${margins.bottom}mm ${margins.left}mm`,
     position: 'relative',
-    overflow: 'hidden',
   };
 
   const iconBtnClass =
@@ -114,6 +247,7 @@ const PrintPreviewModal = ({
 
   return (
     <div
+      id="print-preview-modal"
       className="fixed inset-0 z-[200] flex flex-col"
       style={{
         background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
@@ -211,9 +345,9 @@ const PrintPreviewModal = ({
               <span className="hidden sm:inline">#</span>
             </button>
             <button
-              onClick={() => setShowSignatureSettings(true)}
+              onClick={() => setShowSignaturePanel(!showSignaturePanel)}
               className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                showSignatures
+                showSignaturePanel
                   ? 'bg-purple-600/20 text-purple-400 border border-purple-700/50'
                   : 'text-slate-500 hover:text-slate-300'
               }`}
@@ -552,14 +686,204 @@ const PrintPreviewModal = ({
         </div>
       </div>
 
-      {/* Signature Settings Modal */}
-      <SignatureSettingsModal
-        isOpen={showSignatureSettings}
-        onClose={() => {
-          setShowSignatureSettings(false);
-          loadSignatures(); // Re-fetch from DB after save
-        }}
-      />
+      {/* ═══ Signature Settings Panel (inline) ═══ */}
+      {showSignaturePanel && (
+        <div
+          className="no-print"
+          style={{
+            background: '#0f172a',
+            borderBottom: '1px solid #334155',
+          }}
+        >
+          <div className="px-6 py-3 space-y-3">
+            {/* Preset Selector */}
+            {presets.length > 0 && (
+              <div>
+                <label className="flex items-center gap-1.5 text-[10px] font-bold mb-1.5" style={{ color: '#94a3b8' }}>
+                  <Bookmark size={11} />
+                  تحميل من الإعدادات المحفوظة
+                </label>
+                <div className="flex gap-1 flex-wrap">
+                  {presets.map(preset => {
+                    const canDeleteThis = canDelete(preset);
+                    return (
+                      <div key={preset.id} className="flex items-center gap-0.5">
+                        <button
+                          onClick={() => handleInlinePresetSelect(preset.id)}
+                          className={`flex items-center gap-1 px-2 py-1 rounded-md text-[9px] font-bold transition-all cursor-pointer ${
+                            activePresetId === preset.id
+                              ? 'bg-cyan-600/30 text-cyan-400'
+                              : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                          }`}
+                        >
+                          {preset.is_default && <Star size={8} className="text-amber-400" />}
+                          {preset.name}
+                        </button>
+                        {canDeleteThis && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                await deletePreset(preset.id);
+                              } catch (_) {}
+                            }}
+                            className="p-0.5 rounded hover:bg-slate-700 transition-all"
+                            style={{ color: '#ef4444', opacity: 0.5 }}
+                          >
+                            <Trash2 size={8} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Signature Fields */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
+              <div>
+                <label className="block text-[9px] font-bold mb-1" style={{ color: '#94a3b8' }}>
+                  <User size={10} className="inline ml-1" />
+                  مُعد التقرير
+                </label>
+                <input
+                  type="text"
+                  value={localPreparerName}
+                  onChange={e => setLocalPreparerName(e.target.value)}
+                  placeholder="الاسم..."
+                  className="w-full px-2.5 py-1.5 rounded-lg text-xs"
+                  style={{
+                    background: '#1e293b',
+                    color: '#fff',
+                    border: '1px solid #334155',
+                    textAlign: 'right',
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block text-[9px] font-bold mb-1" style={{ color: '#94a3b8' }}>
+                  <ShieldCheck size={10} className="inline ml-1" />
+                  مدير الصيدلية
+                </label>
+                <input
+                  type="text"
+                  value={localManagerName}
+                  onChange={e => setLocalManagerName(e.target.value)}
+                  placeholder="الاسم..."
+                  className="w-full px-2.5 py-1.5 rounded-lg text-xs"
+                  style={{
+                    background: '#1e293b',
+                    color: '#fff',
+                    border: '1px solid #334155',
+                    textAlign: 'right',
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block text-[9px] font-bold mb-1" style={{ color: '#94a3b8' }}>
+                  <Hash size={10} className="inline ml-1" />
+                  رقم الاعتماد
+                </label>
+                <input
+                  type="text"
+                  value={localApprovalNumber}
+                  onChange={e => setLocalApprovalNumber(e.target.value)}
+                  placeholder="اختياري..."
+                  className="w-full px-2.5 py-1.5 rounded-lg text-xs"
+                  style={{
+                    background: '#1e293b',
+                    color: '#fff',
+                    border: '1px solid #334155',
+                    textAlign: 'right',
+                  }}
+                />
+              </div>
+              <div>
+                <button
+                  onClick={handleSignaturesInlineSave}
+                  disabled={sigSaving || !localPreparerName.trim()}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
+                  style={{
+                    background: sigSaving || !localPreparerName.trim()
+                      ? '#334155'
+                      : 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+                    color: '#fff',
+                    opacity: sigSaving || !localPreparerName.trim() ? 0.5 : 1,
+                  }}
+                >
+                  {sigSaving ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      جاري...
+                    </>
+                  ) : (
+                    <>
+                      <Save size={11} />
+                      حفظ التوقيع
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Save as new preset button + form */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { setShowSaveAsNew(!showSaveAsNew); setNewPresetName(''); }}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[9px] font-bold transition-all cursor-pointer"
+                style={{
+                  background: showSaveAsNew ? '#334155' : 'transparent',
+                  color: '#94a3b8',
+                  border: '1px dashed #475569',
+                }}
+              >
+                <Plus size={10} />
+                <span>حفظ كإعداد جديد</span>
+              </button>
+            </div>
+
+            {showSaveAsNew && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={newPresetName}
+                  onChange={e => setNewPresetName(e.target.value)}
+                  placeholder="اسم الإعداد الجديد..."
+                  className="flex-1 px-2.5 py-1.5 rounded-lg text-xs"
+                  style={{
+                    background: '#1e293b',
+                    color: '#fff',
+                    border: '1px solid #334155',
+                    textAlign: 'right',
+                  }}
+                  onKeyDown={e => e.key === 'Enter' && handleSaveAsNewPreset()}
+                  autoFocus
+                />
+                <button
+                  onClick={handleSaveAsNewPreset}
+                  disabled={sigSaving || !newPresetName.trim() || !localPreparerName.trim()}
+                  className="px-3 py-1.5 rounded-lg text-[9px] font-bold transition-all cursor-pointer"
+                  style={{
+                    background: (sigSaving || !newPresetName.trim() || !localPreparerName.trim())
+                      ? '#334155'
+                      : 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+                    color: '#fff',
+                    opacity: (sigSaving || !newPresetName.trim() || !localPreparerName.trim()) ? 0.5 : 1,
+                  }}
+                >
+                  {sigSaving ? 'جاري...' : 'حفظ'}
+                </button>
+              </div>
+            )}
+
+            {sigToast && (
+              <p className="text-[10px] font-bold animate-fadeIn" style={{ color: sigToast.includes('✅') || sigToast.includes('⭐') ? '#34d399' : '#f87171' }}>
+                {sigToast}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

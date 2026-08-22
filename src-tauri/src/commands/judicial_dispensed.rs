@@ -1,8 +1,12 @@
 use crate::db::AppState;
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use rusqlite::OptionalExtension;
 use crate::commands::audit::log_action;
-use crate::commands::month_isolation::enforce_isolation_lock;
+use crate::commands::month_isolation::{
+    enforce_isolation_lock, enforce_isolation_lock_guard, cleanup_isolation_lock_if_empty,
+    validate_strictly_positive_f64, validate_non_negative_f64,
+};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct JudicialDispensed {
@@ -32,6 +36,11 @@ pub fn save_judicial_dispensed(
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    // --- Negative value validation ---
+    validate_strictly_positive_f64("سعر الوحدة", data.unit_price)?;
+    validate_non_negative_f64("الجرعة الشهرية", data.monthly_dose)?;
+    validate_non_negative_f64("التكلفة الشهرية", data.monthly_cost)?;
+
     // --- Global Month Isolation Lock ---
     let current_level = if data.clinic_id.is_some() {
         "clinic"
@@ -42,6 +51,24 @@ pub fn save_judicial_dispensed(
     };
 
     enforce_isolation_lock(conn, data.branch_id, &data.dispense_month, current_level, false)?;
+
+    // --- Duplicate check (same patient + medicine + location + month + price),
+    //     excluding the current record on update ---
+    let exclude_id = data.id.unwrap_or(-1);
+    let dup: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM judicial_dispensed 
+         WHERE patient_id = ?1 AND medicine_name = ?2 AND dispense_month = ?3 AND branch_id = ?4
+           AND (area_id IS ?5) AND (clinic_id IS ?6) AND id != ?7
+           AND ABS(unit_price - ?8) < 0.0001",
+        rusqlite::params![
+            data.patient_id, data.medicine_name, data.dispense_month, data.branch_id,
+            data.area_id, data.clinic_id, exclude_id, data.unit_price
+        ],
+        |r| r.get(0)
+    ).unwrap_or(0);
+    if dup > 0 {
+        return Err("يوجد ادخال سابق لهذا المريض بنفس الدواء والسعر لهذا الشهر. يمكنك مراجعة السجل والتعديل عليه.".to_string());
+    }
 
     if let Some(id) = data.id {
         // Update
@@ -116,7 +143,7 @@ pub fn get_judicial_dispensed(
                p.court_ruling_date, p.treatment_start_date,
                (SELECT pm.monthly_dose FROM judicial_patient_medicines pm JOIN judicial_medicines m ON pm.medicine_id = m.id WHERE pm.patient_id = d.patient_id AND m.name = d.medicine_name LIMIT 1) as authorized_dose
         FROM judicial_dispensed d
-        JOIN judicial_patients p ON d.patient_id = p.id
+        LEFT JOIN judicial_patients p ON d.patient_id = p.id
         WHERE d.dispense_month = ?1
     ".to_string();
     
@@ -183,7 +210,7 @@ pub fn get_judicial_dispensed_range(
                p.court_ruling_date, p.treatment_start_date,
                (SELECT pm.monthly_dose FROM judicial_patient_medicines pm JOIN judicial_medicines m ON pm.medicine_id = m.id WHERE pm.patient_id = d.patient_id AND m.name = d.medicine_name LIMIT 1) as authorized_dose
         FROM judicial_dispensed d
-        JOIN judicial_patients p ON d.patient_id = p.id
+        LEFT JOIN judicial_patients p ON d.patient_id = p.id
         WHERE d.dispense_month >= ?1 AND d.dispense_month <= ?2
     ".to_string();
     
@@ -241,10 +268,29 @@ pub fn delete_judicial_dispensed(
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
+    let rec: Option<(i32, Option<i32>, Option<i32>, String)> = conn.query_row(
+        "SELECT branch_id, area_id, clinic_id, dispense_month 
+         FROM judicial_dispensed WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional().map_err(|e| e.to_string())?;
+
+    let (branch_id, area_id, clinic_id, dispense_month) = match rec {
+        Some(r) => r,
+        None => return Err("السجل غير موجود".to_string()),
+    };
+
+    let current_level = if clinic_id.is_some() { "clinic" }
+                        else if area_id.is_some() { "area" }
+                        else { "branch" };
+    enforce_isolation_lock_guard(conn, branch_id, &dispense_month, current_level)?;
+
     conn.execute(
         "DELETE FROM judicial_dispensed WHERE id = ?1",
         rusqlite::params![id],
     ).map_err(|e| e.to_string())?;
+
+    cleanup_isolation_lock_if_empty(conn, branch_id, &dispense_month)?;
     
     // Audit log
     let _ = log_action(

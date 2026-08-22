@@ -9,6 +9,8 @@ import PrintableTable from '../../../components/common/PrintableTable';
 import ExportMenu from '../../../components/ui/ExportMenu';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
+import { useGlobalApp } from '../../../context/useGlobalApp';
+import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import { 
   BarChart3, Search, 
   DollarSign, Users, TrendingUp, Pill, Syringe, FileText 
@@ -16,6 +18,7 @@ import {
 
 const AnalyticalReportsPage = () => {
   const toast = useToast();
+  const { workspaceMode, hierarchyNames } = useGlobalApp();
   const [hierarchy, setHierarchy] = useState({
     branchId: '', areaId: '', clinicId: '',
     dispenseMonth: new Date().toISOString().substring(0, 7)
@@ -226,7 +229,7 @@ const AnalyticalReportsPage = () => {
       <Card className="p-6 no-print space-y-6">
         <div className="w-full">
           <HierarchySelector 
-            onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+            onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}
@@ -280,7 +283,7 @@ const AnalyticalReportsPage = () => {
         </div>
 
         <div className="hidden print:block">
-           <PrintableTable title="التحليل الإحصائي العام" subtitle="لوحة تحليلية متكاملة لرصد حركة المنصرف">
+           <PrintableTable title="التحليل الإحصائي العام" subtitle="لوحة تحليلية متكاملة لرصد حركة المنصرف" hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
               <Table 
                 columns={columns} 
                 data={filteredData} 

@@ -7,10 +7,13 @@ import MonthlyDispensedForm from "../../../components/forms/MonthlyDispensedForm
 import BranchMonthlyGridEntry from "../../../components/forms/BranchMonthlyGridEntry";
 import ExcelImportWizard from "../../../components/common/ExcelImportWizard";
 import PrintableTable from '../../../components/common/PrintableTable';
+import { useGlobalApp } from '../../../context/useGlobalApp';
+import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import { FileText, LayoutGrid, FileEdit, FileSpreadsheet } from "lucide-react";
 
 const MonthlyTotalsPage = () => {
   const location = useLocation();
+  const { workspaceMode, hierarchyNames } = useGlobalApp();
   const [hierarchy, setHierarchy] = useState({
     branchId: location.state?.branchId || "",
     areaId: location.state?.areaId || "",
@@ -22,7 +25,7 @@ const MonthlyTotalsPage = () => {
   const [entryMode, setEntryMode] = useState("single"); // 'single' | 'grid' | 'excel'
 
   return (
-    <PrintableTable title="إجمالي المنصرف الشهري" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''}>
+    <PrintableTable title="إجمالي المنصرف الشهري" subtitle={hierarchy.dispenseMonth ? `شهر ${hierarchy.dispenseMonth}` : ''} hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}>
     <div className="space-y-6 animate-fadeIn">
       <Breadcrumb
         items={[
@@ -61,7 +64,7 @@ const MonthlyTotalsPage = () => {
       </div>
 
       <HierarchySelector
-        onSelectionChange={(data) => setHierarchy({ ...hierarchy, ...data })}
+        onSelectionChange={(data) => setHierarchy(prev => ({ ...prev, ...data }))}
         initialBranch={hierarchy.branchId}
         initialArea={hierarchy.areaId}
         initialClinic={hierarchy.clinicId}

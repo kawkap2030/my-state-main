@@ -15,8 +15,10 @@ pub struct ReconciliationRow {
     pub detailed_total: f64,
     pub monthly_total: f64,
     pub difference: f64,
-    pub status: String, // "MATCH", "MISMATCH"
+    pub status: String, // "MATCH", "MISMATCH", "INFO"
     pub category: String, // "drugs", "supplies", "insulin", "tickets"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_name: Option<String>, // drug category name — makes the row expandable
 }
 
 #[tauri::command]
@@ -32,40 +34,133 @@ pub fn get_reconciliation_report(
     let mut report = Vec::new();
 
     // ===============================================================
-    // 1. DRUGS: Detailed (per-item) vs Monthly (aggregated) Totals
+    // 1. DRUGS — broken down by drug category (each category its own row).
+    //    Detailed dispensing is per specific specialty drug (e.g. الثلاثيميا،
+    //    الأورام، هرمون النمو، القلب); monthly free/supported totals are
+    //    funding categories (هيئة/طلاب/رضع/معيلة). These are DIFFERENT
+    //    populations, so we never compare them directly — each category is
+    //    shown separately as a single-source INFO row.
     // ===============================================================
-    let detailed_drugs_total: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_cost), 0) FROM detailed_drug_dispensed 
+    // 1a. Detailed drugs grouped by drug category
+    let mut detailed_drugs_total: f64 = 0.0;
+    {
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(dc.name, 'غير مصنف'), COALESCE(SUM(dd.total_cost), 0) \
+             FROM detailed_drug_dispensed dd \
+             LEFT JOIN drugs d ON dd.drug_id = d.id \
+             LEFT JOIN drug_categories dc ON d.category_id = dc.id \
+             WHERE dd.branch_id = ?1 AND dd.dispense_month = ?2 \
+             GROUP BY dc.name \
+             ORDER BY SUM(dd.total_cost) DESC"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(rusqlite::params![branchId, dispenseMonth], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        }).map_err(|e| e.to_string())?;
+        for r in rows {
+            let (cat, total) = r.map_err(|e| e.to_string())?;
+            detailed_drugs_total += total;
+            report.push(ReconciliationRow {
+                name: format!("الأدوية التفصيلية — {}", cat),
+                detailed_total: total,
+                monthly_total: 0.0,
+                difference: 0.0,
+                status: "INFO".to_string(),
+                category: "drugs".to_string(),
+                category_name: Some(cat.clone()),
+            });
+        }
+        if detailed_drugs_total == 0.0 {
+            report.push(ReconciliationRow {
+                name: "الأدوية التفصيلية — (لا يوجد إدخال)".to_string(),
+                detailed_total: 0.0,
+                monthly_total: 0.0,
+                difference: 0.0,
+                status: "INFO".to_string(),
+                category: "drugs".to_string(),
+                category_name: None,
+            });
+        }
+    }
+
+    // 1b. Monthly free drugs — split by funding category (هيئة/طلاب/رضع/مرأة معيلة)
+    let (free_authority, free_students, free_infants, free_women): (f64, f64, f64, f64) = conn.query_row(
+        "SELECT COALESCE(SUM(drugs_free_authority), 0),
+                COALESCE(SUM(drugs_free_students), 0),
+                COALESCE(SUM(drugs_free_infants), 0),
+                COALESCE(SUM(drugs_free_breadwinner_women), 0)
+         FROM monthly_drugs_dispensed 
+         WHERE branch_id = ?1 AND dispense_month = ?2",
+        rusqlite::params![branchId, dispenseMonth],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    ).unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let free_total = free_authority + free_students + free_infants + free_women;
+
+    for (label, value) in [
+        ("هيئة", free_authority),
+        ("طلاب", free_students),
+        ("رضع", free_infants),
+        ("مرأة معيلة", free_women),
+    ] {
+        report.push(ReconciliationRow {
+            name: format!("الأدوية المجانية (الشهري) — {}", label),
+            detailed_total: 0.0,
+            monthly_total: value,
+            difference: 0.0,
+            status: "INFO".to_string(),
+            category: "drugs".to_string(),
+            category_name: None,
+        });
+    }
+
+    // 1c. Monthly supported drugs — split by funding category (هيئة/طلاب/رضع).
+    //     Value only: patient share is PART of the drug value, not an addition.
+    let (sup_authority, sup_students, sup_infants): (f64, f64, f64) = conn.query_row(
+        "SELECT COALESCE(SUM(drugs_supported_authority_value), 0),
+                COALESCE(SUM(drugs_supported_students_value), 0),
+                COALESCE(SUM(drugs_supported_infants_value), 0)
+         FROM monthly_drugs_dispensed 
+         WHERE branch_id = ?1 AND dispense_month = ?2",
+        rusqlite::params![branchId, dispenseMonth],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    ).unwrap_or((0.0, 0.0, 0.0));
+    let supported_total = sup_authority + sup_students + sup_infants;
+
+    for (label, value) in [
+        ("هيئة", sup_authority),
+        ("طلاب", sup_students),
+        ("رضع", sup_infants),
+    ] {
+        report.push(ReconciliationRow {
+            name: format!("الأدوية المدعمة (الشهري) — {}", label),
+            detailed_total: 0.0,
+            monthly_total: value,
+            difference: 0.0,
+            status: "INFO".to_string(),
+            category: "drugs".to_string(),
+            category_name: None,
+        });
+    }
+
+    // 1d. Drug groups (المجموعات الدوائية) — monthly group costs, own source
+    let groups_total: f64 = conn.query_row(
+        "SELECT COALESCE(SUM(cost), 0) FROM drug_groups 
          WHERE branch_id = ?1 AND dispense_month = ?2",
         rusqlite::params![branchId, dispenseMonth],
         |row| row.get(0)
     ).unwrap_or(0.0);
 
-    let monthly_drugs_total: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(
-            drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women +
-            drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value +
-            drugs_supported_authority_patient_share + drugs_supported_students_patient_share + drugs_supported_infants_patient_share
-        ), 0) FROM monthly_drugs_dispensed 
-         WHERE branch_id = ?1 AND dispense_month = ?2",
-        rusqlite::params![branchId, dispenseMonth],
-        |row| row.get(0)
-    ).unwrap_or(0.0);
-
-    let drugs_diff = detailed_drugs_total - monthly_drugs_total;
     report.push(ReconciliationRow {
-        name: "إجمالي الأدوية (التفصيلي vs الإجمالي الشهري)".to_string(),
-        detailed_total: detailed_drugs_total,
-        monthly_total: monthly_drugs_total,
-        difference: drugs_diff,
-        status: if drugs_diff.abs() < 1.0 { "MATCH".to_string() } else { "MISMATCH".to_string() },
+        name: "المجموعات الدوائية (الشهري)".to_string(),
+        detailed_total: 0.0,
+        monthly_total: groups_total,
+        difference: 0.0,
+        status: "INFO".to_string(),
         category: "drugs".to_string(),
+        category_name: None,
     });
 
     // ===============================================================
-    // 2. SUPPLIES: Monthly aggregates vs monthly_drugs supplies columns
-    //    supplies are in monthly_supplies_dispensed only (no per-item detail table).
-    //    We also check if monthly_drugs_dispensed has supply-related rows to reconcile against.
+    // 2. SUPPLIES: Monthly aggregates only (no per-item detail table exists)
     // ===============================================================
     let supplies_monthly_total: f64 = conn.query_row(
         "SELECT COALESCE(SUM(consumer_value + collective_entities_value), 0) 
@@ -75,69 +170,60 @@ pub fn get_reconciliation_report(
         |row| row.get(0)
     ).unwrap_or(0.0);
 
-    // Check if there is a supplies figure in monthly_drugs_dispensed for cross-reference
-    let supplies_in_monthly_drugs: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(supplies_value), 0) FROM monthly_drugs_dispensed 
-         WHERE branch_id = ?1 AND dispense_month = ?2",
-        rusqlite::params![branchId, dispenseMonth],
-        |row| row.get(0)
-    ).unwrap_or(0.0);
-
-    let (supplies_detailed, supplies_monthly, supplies_diff, supplies_status) = 
-        if supplies_in_monthly_drugs > 0.0 {
-            // We have two sources to compare
-            let d = supplies_in_monthly_drugs - supplies_monthly_total;
-            let s = if d.abs() < 1.0 { "MATCH" } else { "MISMATCH" };
-            (supplies_in_monthly_drugs, supplies_monthly_total, d, s.to_string())
-        } else {
-            // Only monthly_supplies_dispensed source
-            (0.0, supplies_monthly_total, 0.0, "INFO".to_string())
-        };
-
     report.push(ReconciliationRow {
         name: "إجمالي المستلزمات الطبية (الشهري)".to_string(),
-        detailed_total: supplies_detailed,
-        monthly_total: supplies_monthly,
-        difference: supplies_diff,
-        status: supplies_status,
+        detailed_total: 0.0,
+        monthly_total: supplies_monthly_total,
+        difference: 0.0,
+        status: "INFO".to_string(),
         category: "supplies".to_string(),
+        category_name: None,
     });
 
     // ===============================================================
-    // 3. INSULIN: Detailed records vs monthly insulin aggregate (if exists)
+    // 3. INSULIN: Detailed records split into two groups — free (مجاني)
+    //    and supported (مدعم). Each group gets its own expandable row
+    //    (category_name = group name) with a per-insulin sub-table.
     // ===============================================================
-    let insulin_detailed_total: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(cost), 0) FROM insulin_dispensed 
-         WHERE branch_id = ?1 AND dispense_month = ?2",
-        rusqlite::params![branchId, dispenseMonth],
-        |row| row.get(0)
-    ).unwrap_or(0.0);
-
-    // Try to find insulin in monthly_drugs_dispensed (some systems track it there)
-    let insulin_in_monthly: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(insulin_value), 0) FROM monthly_drugs_dispensed 
-         WHERE branch_id = ?1 AND dispense_month = ?2",
-        rusqlite::params![branchId, dispenseMonth],
-        |row| row.get(0)
-    ).unwrap_or(0.0);
-
-    let (insulin_monthly, insulin_diff, insulin_status) = 
-        if insulin_in_monthly > 0.0 {
-            let d = insulin_detailed_total - insulin_in_monthly;
-            let s = if d.abs() < 1.0 { "MATCH" } else { "MISMATCH" };
-            (insulin_in_monthly, d, s.to_string())
-        } else {
-            (0.0, 0.0, "INFO".to_string())
-        };
-
-    report.push(ReconciliationRow {
-        name: "إجمالي الإنسولين (التفصيلي)".to_string(),
-        detailed_total: insulin_detailed_total,
-        monthly_total: insulin_monthly,
-        difference: insulin_diff,
-        status: insulin_status,
-        category: "insulin".to_string(),
-    });
+    let mut insulin_detailed_total: f64 = 0.0;
+    {
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(it.name, 'غير مصنف'), COALESCE(SUM(i.cost), 0) \
+             FROM insulin_dispensed i \
+             LEFT JOIN insulin_codes ic ON i.insulin_code_id = ic.id \
+             LEFT JOIN insulin_types it ON ic.type_id = it.id \
+             WHERE i.branch_id = ?1 AND i.dispense_month = ?2 \
+             GROUP BY it.name \
+             ORDER BY SUM(i.cost) DESC"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(rusqlite::params![branchId, dispenseMonth], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        }).map_err(|e| e.to_string())?;
+        for r in rows {
+            let (group_name, total) = r.map_err(|e| e.to_string())?;
+            insulin_detailed_total += total;
+            report.push(ReconciliationRow {
+                name: format!("الإنسولين {} (التفصيلي)", group_name),
+                detailed_total: total,
+                monthly_total: 0.0,
+                difference: 0.0,
+                status: "INFO".to_string(),
+                category: "insulin".to_string(),
+                category_name: Some(group_name.clone()),
+            });
+        }
+        if insulin_detailed_total == 0.0 {
+            report.push(ReconciliationRow {
+                name: "الإنسولين (لا يوجد إدخال)".to_string(),
+                detailed_total: 0.0,
+                monthly_total: 0.0,
+                difference: 0.0,
+                status: "INFO".to_string(),
+                category: "insulin".to_string(),
+                category_name: None,
+            });
+        }
+    }
 
     // ===============================================================
     // 4. JUDICIAL: Detailed records vs judicial monthly aggregate (if exists)
@@ -149,85 +235,164 @@ pub fn get_reconciliation_report(
         |row| row.get(0)
     ).unwrap_or(0.0);
 
-    let judicial_in_monthly: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(judicial_value), 0) FROM monthly_drugs_dispensed 
-         WHERE branch_id = ?1 AND dispense_month = ?2",
-        rusqlite::params![branchId, dispenseMonth],
-        |row| row.get(0)
-    ).unwrap_or(0.0);
-
-    let (judicial_monthly, judicial_diff, judicial_status) = 
-        if judicial_in_monthly > 0.0 {
-            let d = judicial_detailed_total - judicial_in_monthly;
-            let s = if d.abs() < 1.0 { "MATCH" } else { "MISMATCH" };
-            (judicial_in_monthly, d, s.to_string())
-        } else {
-            (0.0, 0.0, "INFO".to_string())
-        };
-
+    // No monthly judicial aggregate column exists (judicial_value was never
+    // part of the schema) → single-source INFO.
     report.push(ReconciliationRow {
         name: "إجمالي الأحكام القضائية (التفصيلي)".to_string(),
         detailed_total: judicial_detailed_total,
-        monthly_total: judicial_monthly,
-        difference: judicial_diff,
-        status: judicial_status,
+        monthly_total: 0.0,
+        difference: 0.0,
+        status: "INFO".to_string(),
         category: "judicial".to_string(),
+        category_name: None,
     });
 
     // ===============================================================
-    // 5. MEDICAL TICKETS: Detailed records vs tickets in monthly aggregate
+    // 5. MEDICAL TICKETS: counts split by ticket type (56ب / 56ج).
+    //    medical_tickets has NO monetary column — only counts.
     // ===============================================================
-    let tickets_detailed_total: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM medical_tickets 
+    let (tickets_56b, tickets_56c): (i32, i32) = conn.query_row(
+        "SELECT COALESCE(SUM(tickets_56b), 0), COALESCE(SUM(tickets_56c), 0) FROM medical_tickets 
          WHERE branch_id = ?1 AND dispense_month = ?2",
         rusqlite::params![branchId, dispenseMonth],
-        |row| row.get(0)
-    ).unwrap_or(0.0);
-
-    let tickets_in_monthly: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(tickets_value), 0) FROM monthly_drugs_dispensed 
-         WHERE branch_id = ?1 AND dispense_month = ?2",
-        rusqlite::params![branchId, dispenseMonth],
-        |row| row.get(0)
-    ).unwrap_or(0.0);
-
-    let (tickets_monthly, tickets_diff, tickets_status) = 
-        if tickets_in_monthly > 0.0 {
-            let d = tickets_detailed_total - tickets_in_monthly;
-            let s = if d.abs() < 1.0 { "MATCH" } else { "MISMATCH" };
-            (tickets_in_monthly, d, s.to_string())
-        } else {
-            (0.0, 0.0, "INFO".to_string())
-        };
+        |row| Ok((row.get(0)?, row.get(1)?))
+    ).unwrap_or((0, 0));
 
     report.push(ReconciliationRow {
-        name: "إجمالي التذاكر الطبية (التفصيلي)".to_string(),
-        detailed_total: tickets_detailed_total,
-        monthly_total: tickets_monthly,
-        difference: tickets_diff,
-        status: tickets_status,
+        name: "تذاكر طبية (56ب) — العدد".to_string(),
+        detailed_total: tickets_56b as f64,
+        monthly_total: 0.0,
+        difference: 0.0,
+        status: "INFO".to_string(),
         category: "tickets".to_string(),
+        category_name: None,
+    });
+    report.push(ReconciliationRow {
+        name: "تذاكر طبية (56ج) — العدد".to_string(),
+        detailed_total: tickets_56c as f64,
+        monthly_total: 0.0,
+        difference: 0.0,
+        status: "INFO".to_string(),
+        category: "tickets".to_string(),
+        category_name: None,
     });
 
     // ===============================================================
-    // 6. CROSS-CHECK GRAND TOTAL:
-    //    Detailed side: All detailed sources (drugs_detailed + insulin + judicial + tickets)
-    //    Monthly side:  All monthly sources (drugs_monthly + supplies_monthly)
-    //    Compare to find the overall balance difference
+    // 6. CROSS-CHECK GRAND TOTAL (money sources only):
+    //    Detailed side: drugs (all categories) + insulin + judicial
+    //    Monthly side:  free drugs + supported drugs + drug groups + supplies
+    //    (tickets are counts, not money — excluded from the balance)
+    //    This is a cross-source summary: the two sides are different
+    //    populations, so no MATCH/MISMATCH claim is made — INFO only.
     // ===============================================================
-    let grand_detailed = detailed_drugs_total + insulin_detailed_total + judicial_detailed_total + tickets_detailed_total;
-    let grand_monthly = monthly_drugs_total + supplies_monthly_total;
-    let grand_diff = grand_detailed - grand_monthly;
+    let grand_detailed = detailed_drugs_total + insulin_detailed_total + judicial_detailed_total;
+    let grand_monthly = free_total + supported_total + groups_total + supplies_monthly_total;
     report.push(ReconciliationRow {
-        name: "الإجمالي الكلي (جميع المصادر مجمعة)".to_string(),
+        name: "الإجمالي الكلي (مجموع كل المصادر)".to_string(),
         detailed_total: grand_detailed,
         monthly_total: grand_monthly,
-        difference: grand_diff,
-        status: if grand_diff.abs() < 1.0 { "MATCH".to_string() } else { "MISMATCH".to_string() },
+        difference: grand_detailed - grand_monthly,
+        status: "INFO".to_string(),
         category: "summary".to_string(),
+        category_name: None,
     });
 
     Ok(report)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ReconciliationDrugDetail {
+    pub drug_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    pub quantity: f64,
+    pub cases_count: i32,
+    pub unit_price: f64,
+    pub total_cost: f64,
+}
+
+/// Returns the per-drug rows for a given drug category in the reconciliation
+/// report (expanded sub-table when a category row is clicked).
+#[tauri::command]
+#[allow(non_snake_case)]
+pub fn get_reconciliation_drug_details(
+    state: State<'_, AppState>,
+    branchId: i32,
+    dispenseMonth: String,
+    category: String,
+) -> Result<Vec<ReconciliationDrugDetail>, String> {
+    let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+
+    let mut stmt = conn.prepare(
+        "SELECT d.name, d.unit, dd.quantity, dd.cases_count, dd.unit_price, dd.total_cost \
+         FROM detailed_drug_dispensed dd \
+         LEFT JOIN drugs d ON dd.drug_id = d.id \
+         LEFT JOIN drug_categories dc ON d.category_id = dc.id \
+         WHERE dd.branch_id = ?1 AND dd.dispense_month = ?2 \
+           AND COALESCE(dc.name, 'غير مصنف') = ?3 \
+         ORDER BY dd.total_cost DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map(
+        rusqlite::params![branchId, dispenseMonth, category],
+        |row| Ok(ReconciliationDrugDetail {
+            drug_name: row.get(0)?,
+            unit: row.get(1)?,
+            quantity: row.get(2)?,
+            cases_count: row.get(3)?,
+            unit_price: row.get(4)?,
+            total_cost: row.get(5)?,
+        }),
+    ).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(result)
+}
+
+/// Returns the per-insulin rows for a given group (مجاني / مدعم) in the
+/// reconciliation report (expanded sub-table when an insulin group row is clicked).
+#[tauri::command]
+#[allow(non_snake_case)]
+pub fn get_reconciliation_insulin_details(
+    state: State<'_, AppState>,
+    branchId: i32,
+    dispenseMonth: String,
+    group: String,
+) -> Result<Vec<ReconciliationDrugDetail>, String> {
+    let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+
+    let mut stmt = conn.prepare(
+        "SELECT i.name, i.unit, i.quantity, i.cases_count, i.price, i.cost \
+         FROM insulin_dispensed i \
+         LEFT JOIN insulin_codes ic ON i.insulin_code_id = ic.id \
+         LEFT JOIN insulin_types it ON ic.type_id = it.id \
+         WHERE i.branch_id = ?1 AND i.dispense_month = ?2 \
+           AND COALESCE(it.name, 'غير مصنف') = ?3 \
+         ORDER BY i.cost DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map(
+        rusqlite::params![branchId, dispenseMonth, group],
+        |row| Ok(ReconciliationDrugDetail {
+            drug_name: row.get(0)?,
+            unit: row.get(1)?,
+            quantity: row.get(2)?,
+            cases_count: row.get(3)?,
+            unit_price: row.get(4)?,
+            total_cost: row.get(5)?,
+        }),
+    ).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -299,28 +464,13 @@ pub fn get_analytical_report(
     });
 
     // 3. Medical Tickets
-    // medical_tickets only has clinic_id. I need to handle branch/area filtering.
-    // Redo where clause for tables that only have clinic_id.
-    
-    let mut cid_where = "WHERE dispense_month = ?1".to_string();
-    if let Some(_cid) = clinicId {
-        cid_where.push_str(" AND clinic_id = ?2");
-    } else if let Some(_aid) = areaId {
-        cid_where.push_str(" AND clinic_id IN (SELECT id FROM clinics WHERE area_id = ?2)");
-    } else if let Some(_bid) = branchId {
-        cid_where.push_str(" AND clinic_id IN (SELECT c.id FROM clinics c JOIN areas a ON c.area_id = a.id WHERE a.branch_id = ?2)");
-    }
-
-    let params_cid: Vec<Box<dyn rusqlite::ToSql>> = if let Some(id) = clinicId.or(areaId).or(branchId) {
-        vec![Box::new(params[0].as_ref()), Box::new(id)]
-    } else {
-        vec![Box::new(params[0].as_ref())]
-    };
-    let params_cid_ref: Vec<&dyn rusqlite::ToSql> = params_cid.iter().map(|b| b.as_ref()).collect();
-
+    // medical_tickets has its own branch_id / area_id / clinic_id columns, so the
+    // same hierarchy WHERE clause used above applies directly. This also includes
+    // tickets that were saved at area/branch level (their clinic_id is NULL),
+    // which the old clinic-only IN (SELECT ...) filter dropped.
     let (t_56b, t_56c): (Option<i32>, Option<i32>) = conn.query_row(
-        &format!("SELECT SUM(tickets_56b), SUM(tickets_56c) FROM medical_tickets {}", cid_where),
-        params_cid_ref.as_slice(),
+        &format!("SELECT SUM(tickets_56b), SUM(tickets_56c) FROM medical_tickets {}", where_clause),
+        params_ref.as_slice(),
         |row| Ok((row.get(0)?, row.get(1)?))
     ).unwrap_or((None, None));
 
@@ -463,6 +613,22 @@ pub fn get_financial_report(
         value: format!("{:.2}", supported_val.unwrap_or(0.0)),
     });
 
+    // 1b. Detailed drugs total (per-item dispensing) — was missing entirely
+    let detailed_drugs_sql = format!(
+        "SELECT COALESCE(SUM(total_cost), 0) FROM detailed_drug_dispensed {}",
+        where_clause
+    );
+    let detailed_drugs_val: f64 = conn.query_row(
+        &detailed_drugs_sql,
+        params_ref.as_slice(),
+        |row| row.get(0)
+    ).unwrap_or(0.0);
+
+    report.push(FinancialReportRow {
+        item: "إجمالي قيمة الأدوية (تفصيلي)".to_string(),
+        value: format!("{:.2}", detailed_drugs_val),
+    });
+
     // 2. Drug Group Costs
     let groups_sql = format!(
         "SELECT SUM(cost) FROM drug_groups {}", 
@@ -588,7 +754,7 @@ pub fn get_cost_breakdown_report(
     let sql = format!("SELECT dispense_month, COALESCE(SUM(total_cost), 0) FROM detailed_drug_dispensed WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut map = std::collections::HashMap::new();
-    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).unwrap().flatten() {
+    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).map_err(|e| e.to_string())?.flatten() {
         map.insert(row.0, row.1);
     }
     for m in &months {
@@ -599,7 +765,7 @@ pub fn get_cost_breakdown_report(
     let sql = format!("SELECT dispense_month, COALESCE(SUM(cost), 0) FROM insulin_dispensed WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut map = std::collections::HashMap::new();
-    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).unwrap().flatten() {
+    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).map_err(|e| e.to_string())?.flatten() {
         map.insert(row.0, row.1);
     }
     for m in &months {
@@ -610,7 +776,7 @@ pub fn get_cost_breakdown_report(
     let sql = format!("SELECT dispense_month, COALESCE(SUM(cost), 0) FROM drug_groups WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut map = std::collections::HashMap::new();
-    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).unwrap().flatten() {
+    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).map_err(|e| e.to_string())?.flatten() {
         map.insert(row.0, row.1);
     }
     for m in &months {
@@ -621,7 +787,7 @@ pub fn get_cost_breakdown_report(
     let sql = format!("SELECT dispense_month, COALESCE(SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women), 0) FROM monthly_drugs_dispensed WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut map = std::collections::HashMap::new();
-    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).unwrap().flatten() {
+    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).map_err(|e| e.to_string())?.flatten() {
         map.insert(row.0, row.1);
     }
     for m in &months {
@@ -632,7 +798,7 @@ pub fn get_cost_breakdown_report(
     let sql = format!("SELECT dispense_month, COALESCE(SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value), 0) FROM monthly_drugs_dispensed WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut map = std::collections::HashMap::new();
-    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).unwrap().flatten() {
+    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).map_err(|e| e.to_string())?.flatten() {
         map.insert(row.0, row.1);
     }
     for m in &months {
@@ -643,7 +809,7 @@ pub fn get_cost_breakdown_report(
     let sql = format!("SELECT dispense_month, COALESCE(SUM(consumer_value + collective_entities_value), 0) FROM monthly_supplies_dispensed WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut map = std::collections::HashMap::new();
-    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).unwrap().flatten() {
+    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).map_err(|e| e.to_string())?.flatten() {
         map.insert(row.0, row.1);
     }
     for m in &months {
@@ -654,7 +820,7 @@ pub fn get_cost_breakdown_report(
     let sql = format!("SELECT dispense_month, COALESCE(SUM(monthly_cost), 0) FROM judicial_dispensed WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut map = std::collections::HashMap::new();
-    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).unwrap().flatten() {
+    for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).map_err(|e| e.to_string())?.flatten() {
         map.insert(row.0, row.1);
     }
     for m in &months {
@@ -1754,15 +1920,37 @@ pub fn get_pivot_data(
     dataSource: String,
     startMonth: String,
     endMonth: String,
+    branchId: Option<i32>,
+    areaId: Option<i32>,
+    clinicId: Option<i32>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
 
     let mut result = Vec::new();
 
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
+        Box::new(startMonth.clone()),
+        Box::new(endMonth.clone()),
+    ];
+
+    let mut h_filter = String::new();
+    if let Some(cid) = clinicId {
+        h_filter = " AND clinic_id = ?3".to_string();
+        params.push(Box::new(cid));
+    } else if let Some(aid) = areaId {
+        h_filter = " AND area_id = ?3".to_string();
+        params.push(Box::new(aid));
+    } else if let Some(bid) = branchId {
+        h_filter = " AND branch_id = ?3".to_string();
+        params.push(Box::new(bid));
+    }
+
+    let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+
     match dataSource.as_str() {
         "detailed_drugs" => {
-            let mut stmt = conn.prepare("
+            let sql = format!("
                 SELECT b.name, a.name, c.name, dd.dispense_month, d.name, cat.name, dd.quantity, dd.cases_count, dd.total_cost
                 FROM detailed_drug_dispensed dd
                 JOIN branches b ON dd.branch_id = b.id
@@ -1770,10 +1958,11 @@ pub fn get_pivot_data(
                 LEFT JOIN clinics c ON dd.clinic_id = c.id
                 JOIN drugs d ON dd.drug_id = d.id
                 JOIN drug_categories cat ON d.category_id = cat.id
-                WHERE dd.dispense_month >= ?1 AND dd.dispense_month <= ?2
-            ").map_err(|e| e.to_string())?;
+                WHERE dd.dispense_month >= ?1 AND dd.dispense_month <= ?2 {}
+            ", h_filter.replace("clinic_id", "dd.clinic_id").replace("area_id", "dd.area_id").replace("branch_id", "dd.branch_id"));
 
-            let rows = stmt.query_map([startMonth, endMonth], |row| {
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params_ref.as_slice(), |row| {
                 Ok(serde_json::json!({
                     "branch": row.get::<_, String>(0)?,
                     "area": row.get::<_, Option<String>>(1)?.unwrap_or_else(|| "غير محدد".to_string()),
@@ -1792,7 +1981,7 @@ pub fn get_pivot_data(
             }
         }
         "monthly_totals" => {
-            let mut stmt = conn.prepare("
+            let sql = format!("
                 SELECT b.name, a.name, c.name, md.dispense_month,
                        md.drugs_free_authority, md.drugs_free_students, md.drugs_free_infants, md.drugs_free_breadwinner_women,
                        md.drugs_supported_authority_value, md.drugs_supported_students_value, md.drugs_supported_infants_value
@@ -1800,10 +1989,11 @@ pub fn get_pivot_data(
                 JOIN branches b ON md.branch_id = b.id
                 JOIN areas a ON md.area_id = a.id
                 JOIN clinics c ON md.clinic_id = c.id
-                WHERE md.dispense_month >= ?1 AND md.dispense_month <= ?2
-            ").map_err(|e| e.to_string())?;
+                WHERE md.dispense_month >= ?1 AND md.dispense_month <= ?2 {}
+            ", h_filter.replace("clinic_id", "md.clinic_id").replace("area_id", "md.area_id").replace("branch_id", "md.branch_id"));
 
-            let rows = stmt.query_map([startMonth, endMonth], |row| {
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params_ref.as_slice(), |row| {
                 let free_auth = row.get::<_, Option<f64>>(4)?.unwrap_or(0.0);
                 let free_stud = row.get::<_, Option<f64>>(5)?.unwrap_or(0.0);
                 let free_inf  = row.get::<_, Option<f64>>(6)?.unwrap_or(0.0);
@@ -1838,16 +2028,17 @@ pub fn get_pivot_data(
             }
         }
         "insulin" => {
-            let mut stmt = conn.prepare("
+            let sql = format!("
                 SELECT b.name, a.name, c.name, ind.dispense_month, ind.name, ind.type, ind.category, ind.quantity, ind.cases_count, ind.cost
                 FROM insulin_dispensed ind
                 JOIN clinics c ON ind.clinic_id = c.id
                 JOIN areas a ON ind.area_id = a.id
                 JOIN branches b ON a.branch_id = b.id
-                WHERE ind.dispense_month >= ?1 AND ind.dispense_month <= ?2
-            ").map_err(|e| e.to_string())?;
+                WHERE ind.dispense_month >= ?1 AND ind.dispense_month <= ?2 {}
+            ", h_filter.replace("clinic_id", "ind.clinic_id").replace("area_id", "ind.area_id").replace("branch_id", "b.id"));
 
-            let rows = stmt.query_map([startMonth, endMonth], |row| {
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params_ref.as_slice(), |row| {
                 Ok(serde_json::json!({
                     "branch": row.get::<_, String>(0)?,
                     "area": row.get::<_, String>(1)?,
@@ -1867,17 +2058,18 @@ pub fn get_pivot_data(
             }
         }
         "judicial" => {
-            let mut stmt = conn.prepare("
+            let sql = format!("
                 SELECT b.name, a.name, c.name, jd.dispense_month, p.name, jd.diagnosis, jd.medicine_name, jd.monthly_dose, jd.monthly_cost
                 FROM judicial_dispensed jd
                 JOIN clinics c ON jd.clinic_id = c.id
                 JOIN areas a ON jd.area_id = a.id
                 JOIN branches b ON a.branch_id = b.id
                 JOIN judicial_patients p ON jd.patient_id = p.id
-                WHERE jd.dispense_month >= ?1 AND jd.dispense_month <= ?2
-            ").map_err(|e| e.to_string())?;
+                WHERE jd.dispense_month >= ?1 AND jd.dispense_month <= ?2 {}
+            ", h_filter.replace("clinic_id", "jd.clinic_id").replace("area_id", "jd.area_id").replace("branch_id", "b.id"));
 
-            let rows = stmt.query_map([startMonth, endMonth], |row| {
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params_ref.as_slice(), |row| {
                 Ok(serde_json::json!({
                     "branch": row.get::<_, String>(0)?,
                     "area": row.get::<_, String>(1)?,
@@ -1896,7 +2088,7 @@ pub fn get_pivot_data(
             }
         }
         "supplies" => {
-            let mut stmt = conn.prepare("
+            let sql = format!("
                 SELECT b.name, a.name, c.name, sd.dispense_month, s.name, scat.name, sd.consumer_value, sd.collective_entities_value
                 FROM monthly_supplies_dispensed sd
                 JOIN clinics c ON sd.clinic_id = c.id
@@ -1904,10 +2096,11 @@ pub fn get_pivot_data(
                 JOIN branches b ON sd.branch_id = b.id
                 JOIN supplies s ON sd.supply_id = s.id
                 JOIN supply_categories scat ON s.category_id = scat.id
-                WHERE sd.dispense_month >= ?1 AND sd.dispense_month <= ?2
-            ").map_err(|e| e.to_string())?;
+                WHERE sd.dispense_month >= ?1 AND sd.dispense_month <= ?2 {}
+            ", h_filter.replace("clinic_id", "sd.clinic_id").replace("area_id", "sd.area_id").replace("branch_id", "sd.branch_id"));
 
-            let rows = stmt.query_map([startMonth, endMonth], |row| {
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params_ref.as_slice(), |row| {
                 let consumer_val = row.get::<_, Option<f64>>(6)?.unwrap_or(0.0);
                 let collective_val = row.get::<_, Option<f64>>(7)?.unwrap_or(0.0);
                 Ok(serde_json::json!({
@@ -1928,16 +2121,17 @@ pub fn get_pivot_data(
             }
         }
         "medical_tickets" => {
-            let mut stmt = conn.prepare("
+            let sql = format!("
                 SELECT b.name, a.name, c.name, mt.dispense_month, mt.category, mt.period, mt.tickets_56b, mt.tickets_56c
                 FROM medical_tickets mt
                 LEFT JOIN clinics c ON mt.clinic_id = c.id
                 LEFT JOIN areas a ON mt.area_id = a.id
                 LEFT JOIN branches b ON mt.branch_id = b.id
-                WHERE mt.dispense_month >= ?1 AND mt.dispense_month <= ?2
-            ").map_err(|e| e.to_string())?;
+                WHERE mt.dispense_month >= ?1 AND mt.dispense_month <= ?2 {}
+            ", h_filter.replace("clinic_id", "mt.clinic_id").replace("area_id", "mt.area_id").replace("branch_id", "mt.branch_id"));
 
-            let rows = stmt.query_map([startMonth, endMonth], |row| {
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params_ref.as_slice(), |row| {
                 let t_56b = row.get::<_, Option<i32>>(6)?.unwrap_or(0);
                 let t_56c = row.get::<_, Option<i32>>(7)?.unwrap_or(0);
                 Ok(serde_json::json!({

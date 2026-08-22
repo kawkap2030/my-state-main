@@ -23,11 +23,14 @@ import ConfirmModal from '../../../components/ui/ConfirmModal';
 import LockNotificationBanner from '../../../components/common/LockNotificationBanner';
 import StatsBar from '../../../components/common/StatsBar';
 import PrintableTable from '../../../components/common/PrintableTable';
+import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import { executePrint } from '../../../utils/exportPrint';
 import useKeyboardShortcuts from '../../../hooks/useKeyboardShortcuts';
+import useLockGuard from '../../../hooks/useLockGuard';
 
 const InsulinDispensingPage = () => {
-  const { activeHierarchy, checkIsMonthLocked, manualLockedMonths } = useGlobalApp();
+  const { activeHierarchy, hierarchyNames, workspaceMode, checkIsMonthLocked } = useGlobalApp();
   const toast = useToast();
   const location = useLocation();
   
@@ -37,6 +40,7 @@ const InsulinDispensingPage = () => {
     clinicId: location.state?.clinicId || activeHierarchy.clinicId || '',
     dispenseMonth: location.state?.dispenseMonth || activeHierarchy.dispenseMonth || new Date().toISOString().substring(0, 7)
   });
+  const { isLocked: monthLocked, LockBanner } = useLockGuard(hierarchy?.dispenseMonth);
 
   const [categories, setCategories] = useState([]);
   const [types, setTypes] = useState([]);
@@ -110,7 +114,7 @@ const InsulinDispensingPage = () => {
     {
       key: 'p',
       ctrl: true,
-      handler: () => window.print(),
+      handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }),
       description: 'طباعة'
     },
     {
@@ -587,7 +591,7 @@ const InsulinDispensingPage = () => {
           />
 
           <HierarchySelector 
-            onSelectionChange={(data) => setHierarchy({ ...hierarchy, ...data })}
+            onSelectionChange={(data) => setHierarchy(prev => ({ ...prev, ...data }))}
             initialBranch={hierarchy.branchId}
             initialArea={hierarchy.areaId}
             initialClinic={hierarchy.clinicId}
@@ -595,14 +599,7 @@ const InsulinDispensingPage = () => {
           />
 
           {/* Lock Notification Banner */}
-          {checkIsMonthLocked(hierarchy.dispenseMonth) && (
-            <LockNotificationBanner
-              dispenseMonth={hierarchy.dispenseMonth}
-              isLocked={true}
-              isManual={manualLockedMonths?.[hierarchy.dispenseMonth] !== undefined}
-              isSmart={manualLockedMonths?.[hierarchy.dispenseMonth] === undefined}
-            />
-          )}
+          <LockBanner />
 
           <div className="max-w-5xl mx-auto space-y-6">
             <Card className="p-6 h-full shadow-sm">
@@ -615,6 +612,7 @@ const InsulinDispensingPage = () => {
                         onChange={(e) => setFormData({ ...formData, categoryId: e.target.value, codeId: '' })}
                         required
                         data-focus="first-input"
+                        disabled={monthLocked}
                       />
                       <Select 
                         label="النوع (مدعم/مجاني)" icon={Tag}
@@ -622,6 +620,7 @@ const InsulinDispensingPage = () => {
                         value={formData.typeId}
                         onChange={(e) => setFormData({ ...formData, typeId: e.target.value, codeId: '' })}
                         required
+                        disabled={monthLocked}
                       />
                    </div>
 
@@ -631,6 +630,7 @@ const InsulinDispensingPage = () => {
                       value={formData.codeId}
                       onChange={(val) => setFormData({ ...formData, codeId: val })}
                       placeholder="ابحث عن صنف إنسولين..."
+                      disabled={monthLocked}
                    />
 
                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -642,22 +642,25 @@ const InsulinDispensingPage = () => {
                            setFormData({ ...formData, quantity: q, totalCost: (parseFloat(q || 0) * parseFloat(formData.unitPrice || 0)).toFixed(2) });
                         }}
                         required
+                        disabled={monthLocked}
                       />
                       <Input 
                         label="عدد الحالات" type="number" icon={Hash}
                         value={formData.casesCount}
                         onChange={(e) => setFormData({ ...formData, casesCount: e.target.value })}
                         required
+                        disabled={monthLocked}
                       />
                       <div className="space-y-1">
                          <div className="flex items-center justify-between">
                             <label className="field-label mb-1"><DollarSign size={16}/><span>سعر الوحدة</span></label>
-                            {previousPrices.length > 0 && (
-                              <select 
-                                className="text-[10px] font-bold text-primary bg-primary/5 border-none outline-none rounded px-1 cursor-pointer"
-                                onChange={(e) => handlePriceSelection(e.target.value)}
-                                value=""
-                              >
+                             {previousPrices.length > 0 && (
+                               <select 
+                                 className="text-[10px] font-bold text-primary bg-primary/5 border-none outline-none rounded px-1 cursor-pointer"
+                                 onChange={(e) => handlePriceSelection(e.target.value)}
+                                 value=""
+                                 disabled={monthLocked}
+                               >
                                 <option value="" disabled>أسعار سابقة...</option>
                                 {previousPrices.map(p => <option key={p} value={p}>{p}</option>)}
                               </select>
@@ -672,6 +675,7 @@ const InsulinDispensingPage = () => {
                            }}
                            required
                            inputClassName="py-3"
+                           disabled={monthLocked}
                          />
                       </div>
                    </div>
@@ -691,11 +695,11 @@ const InsulinDispensingPage = () => {
                    <Button 
                     variant="ghost" 
                     type="submit" 
-                    icon={checkIsMonthLocked(hierarchy.dispenseMonth) ? Lock : Layers} 
-                    disabled={checkIsMonthLocked(hierarchy.dispenseMonth)}
+                    icon={monthLocked ? Lock : Layers} 
+                    disabled={monthLocked}
                     className="w-full py-4 text-lg border-2 border-dashed border-primary text-primary hover:bg-primary hover:text-white transition-all shadow-sm"
                   >
-                    {checkIsMonthLocked(hierarchy.dispenseMonth) ? 'الشهر مقفل' : 'إضافة للقائمة الفرعية المؤقتة'}
+                    {monthLocked ? 'الشهر مقفل' : 'إضافة للقائمة الفرعية المؤقتة'}
                   </Button>
                 </form>
               </Card>
@@ -747,13 +751,13 @@ const InsulinDispensingPage = () => {
                    </Button>
                    <Button 
                     variant="primary" 
-                    icon={checkIsMonthLocked(hierarchy.dispenseMonth) ? Lock : Save} 
+                    icon={monthLocked ? Lock : Save} 
                     className="flex-1 py-4 rounded-2xl shadow-xl bg-indigo-600 hover:bg-indigo-700 border-none" 
                     loading={savingAll} 
-                    disabled={checkIsMonthLocked(hierarchy.dispenseMonth)}
+                    disabled={monthLocked}
                     onClick={handleSaveAll}
                   >
-                    {checkIsMonthLocked(hierarchy.dispenseMonth) ? 'الشهر مقفل' : '✓ اعتماد وحفظ قائمة الصرف'}
+                    {monthLocked ? 'الشهر مقفل' : '✓ اعتماد وحفظ قائمة الصرف'}
                   </Button>
                 </div>
               </Card>
@@ -952,9 +956,8 @@ const InsulinDispensingPage = () => {
             <div className="hidden print:block">
               <PrintableTable
                 title="سجلات صرف الأنسولين"
-                subtitle={`الشهر: ${hierarchy.dispenseMonth} - الفرع: ${
-                  activeHierarchy.branchName || "جميع الفروع"
-                }`}
+                subtitle={`الشهر: ${hierarchy.dispenseMonth}`}
+                hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}
               >
                 <table className="w-full text-right border-collapse border border-black text-[10px]">
                   <thead>

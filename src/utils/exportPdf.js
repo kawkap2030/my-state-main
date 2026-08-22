@@ -12,7 +12,7 @@
  *   - Backward-compatible with existing exportToPDF() API
  */
 import { saveFileWithDialog, buildDataMatrix, timestamp, LOGO_BASE64, DESIGNER_BASE64 } from './exportHelpers';
-import { AMIRI_FONT_BASE64 } from '../assets/amiriFontBase64';
+import invoke from '../api/tauriApi';
 
 /**
  * Load jsPDF library dynamically with robust fallback.
@@ -54,12 +54,8 @@ const getJsPDF = async () => {
 let amiriAvailable = false;
 
 const registerAmiriFont = async (doc) => {
-  // Always register the font on the given jsPDF instance.
-  // amiriAvailable is a module-level *capability* flag (true = Amiri works),
-  // not a per-instance guard — each new doc needs addFileToVFS + addFont.
-  // Register font every time — amiriAvailable is a module-level flag, not per-instance.
   try {
-    // Use embedded base64 font directly — no fetch() needed
+    const { AMIRI_FONT_BASE64 } = await import('../assets/amiriFontBase64');
     doc.addFileToVFS('Amiri-Regular.ttf', AMIRI_FONT_BASE64);
     
     // jsPDF v4 addFont signature:
@@ -105,7 +101,7 @@ const registerAmiriFont = async (doc) => {
 };
 
 // ─── Helper: Draw Page Header ────────────────────────────────────────
-const drawHeader = (doc, title, subtitle, hierarchyLabel, pageWidth, marginLeft) => {
+const drawHeader = (doc, title, subtitle, hierarchyLabel, monthLabel, pageWidth, marginLeft) => {
   const headerY = 10;
 
   // Top accent line
@@ -131,8 +127,12 @@ const drawHeader = (doc, title, subtitle, hierarchyLabel, pageWidth, marginLeft)
   if (subtitle) {
     doc.text(subtitle, pageWidth - marginLeft - 28, headerY + 13, { align: 'right' });
   }
-  if (hierarchyLabel) {
-    doc.text(hierarchyLabel, pageWidth - marginLeft - 28, headerY + (subtitle ? 18 : 14), { align: 'right' });
+  const metaLine = [
+    hierarchyLabel ? `النطاق: ${hierarchyLabel}` : '',
+    monthLabel ? `شهر البيانات: ${monthLabel}` : '',
+  ].filter(Boolean).join(' | ');
+  if (metaLine) {
+    doc.text(metaLine, pageWidth - marginLeft - 28, headerY + (subtitle ? 18 : 14), { align: 'right' });
   }
 
   // Bottom accent line
@@ -170,7 +170,7 @@ const drawFooter = (doc, pageNum, totalPages, pageWidth, marginLeft, pageHeight,
   doc.text(dateStr, pageWidth - marginLeft, footerY, { align: 'right' });
 };
 
-// ─── Helper: Draw Signatures (with digital signatures from DB) ────────
+// ─── Helper: Draw Signatures (unified with stamp) ─────────────────────
 const drawSignatures = (doc, pageWidth, marginLeft, startY, sigData = {}) => {
   const {
     preparerName = '',
@@ -189,52 +189,53 @@ const drawSignatures = (doc, pageWidth, marginLeft, startY, sigData = {}) => {
   doc.setFontSize(9);
   doc.setTextColor(71, 85, 105);
 
-  // Column 1: مُعد التقرير with real name
   const c1x = marginLeft + colWidth * 0 + colWidth / 2;
   const c2x = marginLeft + colWidth * 1 + colWidth / 2;
   const c3x = marginLeft + colWidth * 2 + colWidth / 2;
 
-  // Underline titles
+  // ── ROW 1: TITLES (always stay, never replaced) ────────────────────
   doc.setDrawColor(148, 163, 184);
   doc.setLineWidth(0.5);
   doc.line(c1x - 15, y, c1x + 15, y);
   doc.line(c2x - 15, y, c2x + 15, y);
   doc.line(c3x - 15, y, c3x + 15, y);
-
-  // Column titles
+  doc.setFontSize(9);
+  doc.setTextColor(71, 85, 105);
   doc.text('مُعد التقرير', c1x, y - 2, { align: 'center' });
   doc.text('مدير الصيدلية / الإدارة', c2x, y - 2, { align: 'center' });
   doc.text('رقم الاعتماد', c3x, y - 2, { align: 'center' });
 
-  // Real names or dots
+  // ── ROW 2: REAL NAMES (replace dots, not titles) ───────────────────
   doc.setFontSize(8);
   doc.setTextColor(15, 23, 42);
-  doc.text(preparerName || '...........................', c1x, y + 7, { align: 'center' });
-  doc.text(managerName || '...........................', c2x, y + 7, { align: 'center' });
-  doc.text(approvalNumber || '...........................', c3x, y + 7, { align: 'center' });
+  doc.text(`الاسم: ${preparerName || '...........................'}`, c1x, y + 7, { align: 'center' });
+  doc.text(`الاسم: ${managerName || '...........................'}`, c2x, y + 7, { align: 'center' });
+  doc.text(`رقم: ${approvalNumber || '...........................'}`, c3x, y + 7, { align: 'center' });
 
-  // Extra fields: signature and date
+  // ── ROW 3: SIGNATURE LINES ────────────────────────────────────────
   doc.setFontSize(7);
   doc.setTextColor(148, 163, 184);
   doc.text('التوقيع: .........................', c1x, y + 14, { align: 'center' });
   doc.text('التوقيع: .........................', c2x, y + 14, { align: 'center' });
   doc.text(`التاريخ: ${dateStr}`, c3x, y + 14, { align: 'center' });
 
-  // Approval note if number is present
-  if (approvalNumber) {
-    doc.setFontSize(6.5);
-    doc.setTextColor(100, 116, 139);
-    doc.text(`تقرير معتمد رقم: ${approvalNumber}`, c3x, y + 21, { align: 'center' });
-  }
+  // ── ROW 4: STAMP LINE (full width) ────────────────────────────────
+  const stampY = y + 23;
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.line(marginLeft + 10, stampY, pageWidth - marginLeft - 10, stampY);
+  doc.setFontSize(8);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`ختم الإدارة: ........................................................`, pageWidth / 2, stampY + 5, { align: 'center' });
 
-  // Designer credit at the bottom
+  // ── Designer credit at the bottom ─────────────────────────────────
   doc.setFontSize(7);
   doc.setTextColor(148, 163, 184);
-  const creditY = y + 30;
+  const creditY = stampY + 18;
   doc.setDrawColor(226, 232, 240);
   doc.setLineWidth(0.3);
   doc.line(marginLeft, creditY - 2, pageWidth - marginLeft, creditY - 2);
-  doc.text(`جميع الحقوق محفوظة © ${new Date().getFullYear()} | منظومة إحصائيات الأدوية`, pageWidth / 2, creditY + 5, { align: 'center' });
+  doc.text(`جميع الحقوق محفوظة © ${new Date().getFullYear()} | منظومة إحصائيات الأدوية والمستلزمات الطبية`, pageWidth / 2, creditY + 5, { align: 'center' });
   doc.text('تصميم وإعداد وتطوير: ك/ أحمد علي أحمد كوكب', pageWidth / 2, creditY + 11, { align: 'center' });
 };
 
@@ -267,6 +268,7 @@ export const exportToPDF = async (data, columns, options = {}) => {
     title = 'تقرير',
     subtitle = '',
     hierarchyLabel = '',
+    monthLabel = '',
     fileName = 'report',
     orientation = 'landscape',
     marginPreset = 'standard',
@@ -278,6 +280,7 @@ export const exportToPDF = async (data, columns, options = {}) => {
     onProgress = null,
      signatures = {}, // { preparerName, managerName, approvalNumber }
      tables = null,
+     writeToPath = null, // when set: write PDF silently to this path (no save dialog)
    } = options;
 
   // ── Build data matrix ──────────────────────────────────────────────
@@ -308,9 +311,7 @@ export const exportToPDF = async (data, columns, options = {}) => {
   const pageHeight = doc.internal.pageSize.getHeight();
 
   // ── Draw header on first page & get content start Y ────────────────
-  const contentStartY = drawHeader(doc, title, subtitle, hierarchyLabel, pageWidth, margins.left);
-
-  // ── Build table configs (single or multi-table) ────────────────────
+  const contentStartY = drawHeader(doc, title, subtitle, hierarchyLabel, monthLabel, pageWidth, margins.left);    // ── Build table configs (single or multi-table) ────────────────────
   // When `tables` is provided, each entry is { data, columns, title }.
   // Otherwise we fall back to the single data/columns pair (backward compat).
   const tableConfigs = tables && tables.length > 0
@@ -343,7 +344,13 @@ export const exportToPDF = async (data, columns, options = {}) => {
   // ── Generate tables sequentially ─────────────────────────────────────
   // Each table starts after the previous one. autoTable handles page
   // breaks automatically; didDrawPage re-draws the header on every page.
+  //
+  // CRITICAL: margin.top MUST equal contentStartY for ALL tables so that
+  // on subsequent pages (where autoTable uses margin.top as the Y start)
+  // the content does NOT overlap with the header drawn by didDrawPage.
+  // header ends at ~32mm (contentStartY = headerY+22).
   let currentY = contentStartY;
+  const consistentTopMargin = contentStartY; // matches header bottom
   tableConfigs.forEach((config, idx) => {
     const columnDefs = config.headers.map((h) => ({ header: h, dataKey: h }));
     const tableBody = config.rows.map((row) => {
@@ -383,7 +390,7 @@ export const exportToPDF = async (data, columns, options = {}) => {
       body: tableBody,
       startY: idx === 0 ? contentStartY : currentY,
       margin: {
-        top: idx === 0 ? contentStartY + 2 : margins.top,
+        top: consistentTopMargin, // Same for ALL tables — avoids header overlap on new pages
         bottom: margins.bottom + 10,
         left: margins.left,
         right: margins.right,
@@ -393,7 +400,7 @@ export const exportToPDF = async (data, columns, options = {}) => {
       headStyles: headStyles,
       alternateRowStyles: altRowStyles,
       didDrawPage: () => {
-        drawHeader(doc, title, subtitle, hierarchyLabel, pageWidth, margins.left);
+        drawHeader(doc, title, subtitle, hierarchyLabel, monthLabel, pageWidth, margins.left);
       },
       didParseCell: (data) => {
         if (data.row?.raw?.isGroupHeader) {
@@ -408,46 +415,78 @@ export const exportToPDF = async (data, columns, options = {}) => {
     currentY = (doc.lastAutoTable?.finalY || currentY) + 10;
   });
 
-  // ── Now totalPages is final — apply footers once ───────────────────
-  const totalPages = doc.internal.getNumberOfPages();
-  applyAllFooters(doc, totalPages, pageWidth, margins.left, pageHeight, footerText, showPageNumbers);
+  // ── Calculate chart dimensions if present ────────────────────────────
+  const chartImgWidth = pageWidth - margins.left * 2;
+  const chartImgHeight = chartImgWidth * 0.35; // 2.85:1 aspect ratio
 
-  // ── Add chart image after the table (using lastAutoTable.finalY) ────
+  // ── Add chart image on its own page or after the table ────────────────
   if (chartImage) {
-    const lastPage = totalPages;
-    doc.setPage(lastPage);
-    const chartY = (doc.lastAutoTable?.finalY || contentStartY + 20) + 5;
-    drawChart(doc, chartImage, pageWidth, margins.left, chartY);
-  }
+    const lastTableEndY = doc.lastAutoTable?.finalY || contentStartY + 20;
+    const spaceAfterTable = pageHeight - margins.bottom - lastTableEndY;
+    const neededSpace = chartImgHeight + 30; // chart + padding + signatures estimate
 
-  // ── Add signatures on the last page ────────────────────────────────
-  if (showSignatures) {
-    const lastAutoTableY = doc.lastAutoTable?.finalY || contentStartY + 20;
-    let sigPage = totalPages;
-    doc.setPage(sigPage);
-
-    // Re-draw header if we moved to a new page (for chart)
-    const chartEndY = chartImage
-      ? (doc.lastAutoTable?.finalY || contentStartY + 20) + 5 + (pageWidth - margins.left * 2) * 0.35 + 5
-      : lastAutoTableY + 5;
-
-    const sigStartY = Math.max(chartEndY, margins.top + 26);
-    if (sigStartY > pageHeight - margins.bottom - 40) {
-      // Need a new page for signatures
+    if (spaceAfterTable < neededSpace) {
+      // Not enough room — add a new page for chart + signatures
       doc.addPage();
-      sigPage = doc.internal.getNumberOfPages();
-      drawHeader(doc, title, subtitle, hierarchyLabel, pageWidth, margins.left);
-      drawSignatures(doc, pageWidth, margins.left, margins.top + 28, signatures);
-      // Update footer on the new page too
-      applyAllFooters(doc, sigPage, pageWidth, margins.left, pageHeight, footerText, showPageNumbers);
+      drawHeader(doc, title, subtitle, hierarchyLabel, monthLabel, pageWidth, margins.left);
+      const newPageY = consistentTopMargin + 5;
+      drawChart(doc, chartImage, pageWidth, margins.left, newPageY);
+      if (showSignatures) {
+        const sigY = newPageY + chartImgHeight + 10;
+        if (sigY + 40 < pageHeight - margins.bottom) {
+          drawSignatures(doc, pageWidth, margins.left, sigY, signatures);
+        } else {
+          // Still not enough room after chart — add yet another page for sigs
+          doc.addPage();
+          drawHeader(doc, title, subtitle, hierarchyLabel, monthLabel, pageWidth, margins.left);
+          drawSignatures(doc, pageWidth, margins.left, consistentTopMargin + 6, signatures);
+        }
+      }
     } else {
-      drawSignatures(doc, pageWidth, margins.left, sigStartY, signatures);
+      // Enough room on the last table page — place chart after table
+      const lastPage = doc.internal.getNumberOfPages();
+      doc.setPage(lastPage);
+      const chartY = lastTableEndY + 5;
+      drawChart(doc, chartImage, pageWidth, margins.left, chartY);
+      if (showSignatures) {
+        const sigY = chartY + chartImgHeight + 10;
+        if (sigY + 40 < pageHeight - margins.bottom) {
+          drawSignatures(doc, pageWidth, margins.left, sigY, signatures);
+        } else {
+          doc.addPage();
+          drawHeader(doc, title, subtitle, hierarchyLabel, monthLabel, pageWidth, margins.left);
+          drawSignatures(doc, pageWidth, margins.left, consistentTopMargin + 6, signatures);
+        }
+      }
+    }
+  } else if (showSignatures) {
+    // No chart — just add signatures on the last page
+    const lastTableEndY = doc.lastAutoTable?.finalY || contentStartY + 20;
+    const lastPage = doc.internal.getNumberOfPages();
+    doc.setPage(lastPage);
+    if (lastTableEndY + 40 < pageHeight - margins.bottom) {
+      drawSignatures(doc, pageWidth, margins.left, lastTableEndY + 5, signatures);
+    } else {
+      doc.addPage();
+      drawHeader(doc, title, subtitle, hierarchyLabel, monthLabel, pageWidth, margins.left);
+      drawSignatures(doc, pageWidth, margins.left, consistentTopMargin + 6, signatures);
     }
   }
+
+  // ── FINAL step: apply footers to ALL pages (after all content placed) ──
+  const totalPages = doc.internal.getNumberOfPages();
+  applyAllFooters(doc, totalPages, pageWidth, margins.left, pageHeight, footerText, showPageNumbers);
 
   // ── Save the PDF ───────────────────────────────────────────────────
   try {
     const pdfBuffer = doc.output('arraybuffer');
+    if (writeToPath) {
+      // Silent write to a fixed path (used by scheduled reports) — no dialog.
+      const bytes = Array.from(new Uint8Array(pdfBuffer));
+      await invoke('write_binary_file', { path: writeToPath, contents: bytes });
+      if (onProgress) onProgress(100);
+      return { success: true, filePath: writeToPath, fileSizeKb: bytes.length / 1024 };
+    }
     const success = await saveFileWithDialog(
       pdfBuffer,
       `${fileName}_${timestamp()}.pdf`,

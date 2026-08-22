@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  LayoutDashboard, FileText, Syringe, ShoppingCart, Scale,
+  FileText, Syringe, ShoppingCart, Scale,
   Activity, ClipboardList, Layers, Landmark, ArrowRight,
   Building2, CalendarDays, AlertCircle, CheckCircle2,
   TrendingUp, Clock, BarChart4, Sparkles, RefreshCw,
@@ -17,6 +17,7 @@ import PerformanceSummary from '../../components/dashboard/PerformanceSummary';
 import Card from '../../components/ui/Card';
 import invoke from '../../api/tauriApi';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend } from 'recharts';
+import designerImg from '../../assets/Ahmed.jpeg';
 
 const quickLinks = [
   { label: 'منصرف الأدوية (تفصيلي)', to: '/transactions/drug-dispensing', icon: ShoppingCart, color: 'var(--color-dash-5)' },
@@ -27,36 +28,35 @@ const quickLinks = [
   { label: 'منصرف الأحكام القضائية', to: '/transactions/judicial-dispensing', icon: Scale, color: 'var(--color-dash-6)' },
 ];
 
-// Helper: get time-based greeting
-const getGreeting = () => {
-  const h = new Date().getHours();
-  if (h < 12) return 'صباح الخير';
-  if (h < 17) return 'مساء الخير';
-  return 'مساء النور';
-};
-
 const DashboardPage = () => {
   const [branches, setBranches] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState('');
   const [dispenseMonth, setDispenseMonth] = useState(() => {
+    // Business rule: the dashboard opens on the PREVIOUS CALENDAR MONTH
+    // (current month - 1), never on "the latest month that contains data".
     const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
   });
 
   const [summary, setSummary] = useState({
     total_dispensed: 0,
     active_clinics: 0,
+    active_clinics_level: 'branch',
     tickets_count: 0,
     judicial_count: 0,
     authority_cost: 0,
+    has_authority_data: false,
   });
 
   const [prevSummary, setPrevSummary] = useState({
     total_dispensed: 0,
     active_clinics: 0,
+    active_clinics_level: 'branch',
     tickets_count: 0,
     judicial_count: 0,
     authority_cost: 0,
+    has_authority_data: false,
   });
 
   const [trendData, setTrendData] = useState([]);
@@ -66,15 +66,17 @@ const DashboardPage = () => {
   const [perfLoading, setPerfLoading] = useState(true);
   const [hasMonthData, setHasMonthData] = useState(false);
   const [prevMonthHasData, setPrevMonthHasData] = useState(false);
+  const [monthCheckError, setMonthCheckError] = useState(false);
 
   // New dashboard widgets
   const [ytdData, setYtdData] = useState(null); // { current, previous }
   const [missingMonths, setMissingMonths] = useState([]);
   const [recentActivity, setRecentActivity] = useState([]);
-  const [staleWarning, setStaleWarning] = useState('');
 
   const calcTrend = (current, previous) => {
-    if (!previous || previous === 0) return { dir: 'up', val: '-', pct: 0 };
+    if (previous === undefined || previous === null || previous === 0) {
+      return { dir: 'none', val: 'لا توجد بيانات للمقارنة', pct: 0 };
+    }
     const diff = current - previous;
     const pct = (diff / previous) * 100;
     return {
@@ -85,7 +87,7 @@ const DashboardPage = () => {
   };
 
   const calcProgress = (current, previous) => {
-    if (!previous || previous === 0) return 50;
+    if (!previous || previous === 0) return undefined;
     const pct = (current / previous) * 100;
     return Math.min(Math.max(pct, 0), 100);
   };
@@ -117,23 +119,6 @@ const DashboardPage = () => {
 
     // Recent activity
     invoke('get_recent_activity', { limit: 8 }).then(setRecentActivity).catch(console.error);
-
-    // Stale data warning
-    invoke('get_latest_dispense_month')
-      .then((latest) => {
-        if (latest && typeof latest === 'string' && latest.includes('-')) {
-          const [ly, lm] = latest.split('-').map(Number);
-          const now = new Date();
-          const latestDate = new Date(ly, lm - 1);
-          const diffMonths = (now.getFullYear() - latestDate.getFullYear()) * 12 + (now.getMonth() - latestDate.getMonth());
-          if (diffMonths >= 2) {
-            setStaleWarning(`آخر تحديث للبيانات: ${latest} — لم يتم إدخال بيانات منذ ${diffMonths} أشهر`);
-          } else {
-            setStaleWarning('');
-          }
-        }
-      })
-      .catch(() => setStaleWarning(''));
   }, [selectedBranch, currentYear]);
 
   useEffect(() => {
@@ -148,9 +133,11 @@ const DashboardPage = () => {
           setSummary({
             total_dispensed: data.total_dispensed ?? 0,
             active_clinics: data.active_clinics ?? 0,
+            active_clinics_level: data.active_clinics_level || 'branch',
             tickets_count: data.tickets_count ?? 0,
             judicial_count: data.judicial_count ?? 0,
             authority_cost: data.authority_cost ?? 0,
+            has_authority_data: !!data.has_authority_data,
           });
         }
       })
@@ -174,9 +161,11 @@ const DashboardPage = () => {
             setPrevSummary({
               total_dispensed: data.total_dispensed ?? 0,
               active_clinics: data.active_clinics ?? 0,
+              active_clinics_level: data.active_clinics_level || 'branch',
               tickets_count: data.tickets_count ?? 0,
               judicial_count: data.judicial_count ?? 0,
               authority_cost: data.authority_cost ?? 0,
+              has_authority_data: !!data.has_authority_data,
             });
           }
         })
@@ -221,12 +210,15 @@ const DashboardPage = () => {
       })
     ])
       .then(([current, previous]) => {
+        setMonthCheckError(false);
         setHasMonthData(!!current);
         setPrevMonthHasData(!!previous);
       })
       .catch(() => {
-        setHasMonthData(true);
-        setPrevMonthHasData(true);
+        // A failed check must NOT claim data exists — surface the uncertainty.
+        setMonthCheckError(true);
+        setHasMonthData(false);
+        setPrevMonthHasData(false);
       });
 
     // Anomalies
@@ -257,6 +249,38 @@ const DashboardPage = () => {
   const totalSurges = anomalies?.surge_drugs?.length || 0;
   const totalAlerts = totalOutliers + totalSurges;
 
+  const activeLevelLabel =
+    summary?.active_clinics_level === 'clinic'
+      ? 'عيادة'
+      : summary?.active_clinics_level === 'area'
+      ? 'منطقة'
+      : 'فرع';
+
+  const isClinicLevel = summary?.active_clinics_level === 'clinic';
+  const hasPrevDispense = (prevSummary?.total_dispensed ?? 0) > 0;
+  const hasPrevAuthority = (prevSummary?.authority_cost ?? 0) > 0;
+  const hasPrevTickets = (prevSummary?.tickets_count ?? 0) > 0;
+  const hasPrevClinics = (prevSummary?.active_clinics ?? 0) > 0;
+  const hasPrevJudicial = (prevSummary?.judicial_count ?? 0) > 0;
+
+  const ytdTrend = ytdData?.previous > 0
+    ? {
+        dir: ytdData.current >= ytdData.previous ? 'up' : 'down',
+        val: `${Math.abs(((ytdData.current - ytdData.previous) / ytdData.previous) * 100).toFixed(1)}%`,
+      }
+    : { dir: 'none', val: 'لا توجد بيانات للمقارنة' };
+
+  // Stale data warning (derived, not state): driven by the unified
+  // data-existence check (get_missing_months), NOT by a per-table "latest
+  // month". If the default month (previous calendar month) has no records,
+  // warn honestly.
+  const missingMonthsArr = Array.isArray(missingMonths) ? missingMonths : [];
+  const prevDefaultDate = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
+  const prevDefaultStr = `${prevDefaultDate.getFullYear()}-${String(prevDefaultDate.getMonth() + 1).padStart(2, '0')}`;
+  const staleWarning = missingMonthsArr.includes(prevDefaultStr)
+    ? `لم يتم إدخال بيانات شهر ${prevDefaultStr} بعد — الأرقام أدناه تعكس ذلك`
+    : '';
+
   return (
     <div dir="rtl" className="animate-in fade-in duration-500 pb-10">
       <Breadcrumb items={[{ label: 'الرئيسية' }]} />
@@ -264,22 +288,22 @@ const DashboardPage = () => {
       {/* ── Header Section ─────────────────────────────────────────────── */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
         <div className="flex items-center gap-4">
-          <div
-            className="section-icon"
-            style={{
-              background: 'linear-gradient(135deg, var(--color-primary), var(--color-secondary))',
-              color: 'white',
-              boxShadow: '0 8px 24px rgba(8, 145, 178, 0.25)',
-            }}
-          >
-            <LayoutDashboard size={24} />
+          <div className="relative flex-shrink-0 group animate-fadeIn">
+            {/* Gradient ring glow behind the icon */}
+            <div className="absolute -inset-2 rounded-full bg-gradient-to-br from-cyan-400 via-emerald-300 to-cyan-500 opacity-50 blur-sm group-hover:opacity-70 group-hover:scale-110 transition-all duration-500" />
+            <div
+              className="relative w-10 h-10 rounded-full overflow-hidden border-2 border-white/80 shadow-md transition-all duration-300 hover:shadow-lg hover:scale-110"
+              style={{ boxShadow: '0 4px 12px rgba(8, 145, 178, 0.2)' }}
+            >
+              <img src={designerImg} alt="أحمد كوكب" className="w-full h-full object-cover" />
+            </div>
           </div>
           <div>
             <h1 className="text-2xl font-black tracking-tight" style={{ color: 'var(--color-text)' }}>
-              {getGreeting()} 👋
+              مرحباً بك في تطبيق إحصائيات الأدوية
             </h1>
-            <p className="text-sm font-medium" style={{ color: 'var(--color-text-muted)' }}>
-              مرحباً بك في نظام إحصائيات الأدوية والمستلزمات الطبية
+            <p className="text-sm font-bold opacity-60" style={{ color: 'var(--color-text-muted)' }}>
+              مع تحياتي — أحمد كوكب
             </p>
           </div>
         </div>
@@ -358,29 +382,31 @@ const DashboardPage = () => {
           trendValue={calcTrend(summary?.total_dispensed, prevSummary?.total_dispensed).val}
           icon={BarChart4}
           color="var(--color-dash-1)"
-          progress={calcProgress(summary?.total_dispensed, prevSummary?.total_dispensed || summary?.total_dispensed * 0.8)}
-          progressLabel="مقارنة بالشهر السابق"
+          progress={calcProgress(summary?.total_dispensed, prevSummary?.total_dispensed)}
+          progressLabel={hasPrevDispense ? 'مقارنة بالشهر السابق' : undefined}
         />
         <StatCard
           label="تكلفة الهيئة"
-          value={(summary?.authority_cost ?? 0).toLocaleString()}
-          subValue="ج.م"
+          value={summary?.has_authority_data ? (summary?.authority_cost ?? 0).toLocaleString() : 'غير متاح'}
+          subValue={summary?.has_authority_data ? 'ج.م' : undefined}
           trend={calcTrend(summary?.authority_cost, prevSummary?.authority_cost).dir}
           trendValue={calcTrend(summary?.authority_cost, prevSummary?.authority_cost).val}
           icon={Landmark}
           color="var(--color-dash-2)"
-          badge="مباشر"
-          progress={calcProgress(summary?.authority_cost, prevSummary?.authority_cost || summary?.authority_cost * 0.75)}
-          progressLabel="من إجمالي المنصرف"
+          badge={summary?.has_authority_data ? 'مباشر' : 'لا توجد بيانات'}
+          progress={summary?.has_authority_data ? calcProgress(summary?.authority_cost, prevSummary?.authority_cost) : undefined}
+          progressLabel={summary?.has_authority_data && hasPrevAuthority ? 'مقارنة بالشهر السابق' : undefined}
         />
         <StatCard
-          label="العيادات النشطة"
+          label="الكيانات النشطة"
           value={(summary?.active_clinics ?? 0).toLocaleString()}
-          subValue="عيادة"
+          subValue={activeLevelLabel}
           trend={calcTrend(summary?.active_clinics, prevSummary?.active_clinics).dir}
           trendValue={calcTrend(summary?.active_clinics, prevSummary?.active_clinics).val}
           icon={Activity}
           color="var(--color-dash-3)"
+          progress={calcProgress(summary?.active_clinics, prevSummary?.active_clinics)}
+          progressLabel={hasPrevClinics ? 'مقارنة بالشهر السابق' : undefined}
         />
         <StatCard
           label="تذاكر طبية"
@@ -390,7 +416,9 @@ const DashboardPage = () => {
           trendValue={calcTrend(summary?.tickets_count, prevSummary?.tickets_count).val}
           icon={ClipboardList}
           color="var(--color-dash-4)"
-          badge={summary?.tickets_count > 0 ? `${Math.round(summary.tickets_count / (summary.active_clinics || 1))}/عيادة` : undefined}
+          badge={isClinicLevel && summary?.tickets_count > 0 ? `${Math.round(summary.tickets_count / (summary.active_clinics || 1))}/عيادة` : undefined}
+          progress={calcProgress(summary?.tickets_count, prevSummary?.tickets_count)}
+          progressLabel={hasPrevTickets ? 'مقارنة بالشهر السابق' : undefined}
         />
         <StatCard
           label="مرضى الأحكام"
@@ -400,13 +428,15 @@ const DashboardPage = () => {
           trendValue={calcTrend(summary?.judicial_count, prevSummary?.judicial_count).val}
           icon={Scale}
           color="var(--color-dash-5)"
+          progress={calcProgress(summary?.judicial_count, prevSummary?.judicial_count)}
+          progressLabel={hasPrevJudicial ? 'مقارنة بالشهر السابق' : undefined}
         />
         <StatCard
           label="إجمالي السنة (YTD)"
           value={ytdData?.current !== undefined ? ytdData.current.toLocaleString() : '...'}
           subValue="ج.م"
-          trend={ytdData?.previous && ytdData?.current >= ytdData.previous ? 'up' : ytdData?.previous ? 'down' : undefined}
-          trendValue={ytdData?.previous > 0 ? `${Math.abs(((ytdData.current - ytdData.previous) / ytdData.previous) * 100).toFixed(1)}%` : undefined}
+          trend={ytdTrend.dir}
+          trendValue={ytdTrend.val}
           icon={DollarSign}
           color="var(--color-dash-6)"
           badge={`${currentYear} vs ${parseInt(currentYear)-1}`}
@@ -434,7 +464,14 @@ const DashboardPage = () => {
               </h3>
             </div>
             <div className="space-y-2">
-              {hasMonthData ? (
+              {monthCheckError ? (
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30">
+                  <AlertCircle size={14} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                  <p className="text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                    تعذر التحقق من حالة إدخال بيانات هذا الشهر
+                  </p>
+                </div>
+              ) : hasMonthData ? (
                 <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/30">
                   <CheckCircle2 size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
                   <p className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300">

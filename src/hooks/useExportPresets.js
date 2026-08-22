@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import invoke from '../api/tauriApi';
 import { useAuth } from '../context/AuthContext';
 
@@ -15,6 +15,14 @@ const useExportPresets = () => {
   const { user } = useAuth();
   const userId = user?.id || null;
   const isAdmin = user?.role === 'admin';
+  // ═══ Refs for loadPresets (stable reference, no cascade) ═══
+  // loadPresets uses refs instead of closure variables so the
+  // useCallback can have empty deps, preventing the cascade of
+  // 10+ get_export_presets calls during startup.
+  const userIdRef = useRef(userId);
+  const isAdminRef = useRef(isAdmin);
+  userIdRef.current = userId;
+  isAdminRef.current = isAdmin;
 
   const [presets, setPresets] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -22,12 +30,14 @@ const useExportPresets = () => {
   const [activePresetId, setActivePresetId] = useState(null);
 
   // ── Load presets (filtered by user_id + scope) ──────────────────────
+  // NOTE: Empty deps — function reference is STABLE, never triggers re-run.
+  // Uses refs for latest userId/isAdmin.
   const loadPresets = useCallback(async () => {
     setLoading(true);
     try {
       const data = await invoke('get_export_presets', {
-        userId,
-        isAdmin,
+        userId: userIdRef.current,
+        isAdmin: isAdminRef.current,
       });
       setPresets(data);
       // Set active preset: prefer default, else first preset
@@ -42,7 +52,7 @@ const useExportPresets = () => {
     } finally {
       setLoading(false);
     }
-  }, [userId, isAdmin]);
+  }, []); // <-- empty deps: STABLE reference, no cascade!
 
   useEffect(() => {
     loadPresets();
@@ -77,8 +87,13 @@ const useExportPresets = () => {
   // ── Check if current user can delete this preset ────────────────────
   const canDelete = useCallback((preset) => {
     if (!preset) return false;
-    // Admin can delete any preset; users can delete their own
-    return isAdmin || (userId && preset.user_id === userId);
+    // Admin can delete any preset
+    if (isAdmin) return true;
+    // Users can delete their own presets
+    if (userId && preset.user_id === userId) return true;
+    // Legacy presets (user_id === null) are deletable by everyone (created before user tracking)
+    if (preset.user_id === null || preset.user_id === undefined) return true;
+    return false;
   }, [isAdmin, userId]);
 
   // ── Alias: canChangeScope always true for admins (scope logic in backend) ──
@@ -100,6 +115,7 @@ const useExportPresets = () => {
         managerName: data.managerName || '',
         approvalNumber: data.approvalNumber || '',
         isDefault: data.isDefault || false,
+        presetId: data.id || null,   // Pass preset ID for rename operations
       });
       await loadPresets();
       if (result.is_default) setActivePresetId(result.id);
@@ -136,6 +152,18 @@ const useExportPresets = () => {
     }
   }, [loadPresets]);
 
+  // ── Reorder presets (drag & drop) ───────────────────────────────────
+  const reorderPresets = useCallback(async (orderedIds) => {
+    try {
+      await invoke('reorder_export_presets', { orderedIds });
+      // Reload to get updated timestamps/order
+      await loadPresets();
+    } catch (err) {
+      console.error('Failed to reorder presets:', err);
+      throw err;
+    }
+  }, [loadPresets]);
+
   return {
     presets,
     loading,
@@ -150,6 +178,7 @@ const useExportPresets = () => {
     savePreset,
     deletePreset,
     setDefaultPreset,
+    reorderPresets,
     canDelete,
     canChangeScope,
   };

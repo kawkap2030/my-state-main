@@ -19,6 +19,7 @@ import {
 import invoke from '../../../api/tauriApi';
 import { useToast } from '../../../components/ui/Toast';
 import { useGlobalApp } from '../../../context/useGlobalApp';
+import { useAuth } from '../../../context/AuthContext';
 import { isMonthLocked } from '../../../utils/dateUtils';
 import Button from '../../../components/ui/Button';
 
@@ -51,6 +52,7 @@ const generateMonthRange = (past = 12, future = 6) => {
 
 const LockManagementPage = () => {
   const toast = useToast();
+  const { user } = useAuth();
   const {
     manualLockedMonths,
     setManualLockedMonths,
@@ -73,7 +75,7 @@ const LockManagementPage = () => {
     setLoading(true);
     try {
       const dataMonths = await invoke('get_months_with_data');
-      setAllMonths(dataMonths);
+      setAllMonths(Array.isArray(dataMonths) ? dataMonths : []);
     } catch (err) {
       toast.error('فشل في تحميل قائمة الأشهر');
     } finally {
@@ -176,11 +178,17 @@ const LockManagementPage = () => {
   // ── Toggle lock (with password protection) ─────────────────────────────
 
   const handleToggle = useCallback(async (key, currentlyLocked) => {
-    // If unlocking, ask for password
-    if (currentlyLocked && !isMasterUnlocked) {
-      const pass = window.prompt('🔒 يرجى إدخال كلمة سر المدير لفتح قفل هذا الشهر:');
-      if (pass !== 'admin123') {
-        if (pass !== null) toast.error('❌ كلمة السر غير صحيحة!');
+    // Both locking and unlocking require admin password unless master unlocked
+    if (!isMasterUnlocked) {
+      const promptMsg = currentlyLocked
+        ? '🔒 يرجى إدخال كلمة سر المدير لفتح قفل هذا الشهر:'
+        : '🔒 يرجى إدخال كلمة سر المدير لقفل هذا الشهر:';
+      const pass = window.prompt(promptMsg);
+      if (pass === null) return;
+      try {
+        await invoke('verify_admin_password', { password: pass, userId: user?.id, username: user?.username });
+      } catch (err) {
+        toast.error(`❌ ${err}`);
         return;
       }
     }
@@ -202,7 +210,7 @@ const LockManagementPage = () => {
     } finally {
       setToggling(null);
     }
-  }, [isMasterUnlocked, setManualLockedMonths, toast]);
+  }, [isMasterUnlocked, user?.id, user?.username, setManualLockedMonths, toast]);
 
   // ── Batch toggle ──────────────────────────────────────────────────────
 
@@ -217,11 +225,17 @@ const LockManagementPage = () => {
     const count = selectedKeys.size;
     if (!window.confirm(`هل أنت متأكد من ${action} ${count} شهر؟`)) return;
 
-    // Password for unlocking
-    if (!lockValue && !isMasterUnlocked) {
-      const pass = window.prompt('🔒 يرجى إدخال كلمة سر المدير لفتح الأقفال:');
-      if (pass !== 'admin123') {
-        if (pass !== null) toast.error('❌ كلمة السر غير صحيحة!');
+    // Password for locking or unlocking
+    if (!isMasterUnlocked) {
+      const promptMsg = lockValue
+        ? '🔒 يرجى إدخال كلمة سر المدير لقفل الأقفال:'
+        : '🔒 يرجى إدخال كلمة سر المدير لفتح الأقفال:';
+      const pass = window.prompt(promptMsg);
+      if (pass === null) return;
+      try {
+        await invoke('verify_admin_password', { password: pass, userId: user?.id, username: user?.username });
+      } catch (err) {
+        toast.error(`❌ ${err}`);
         return;
       }
     }
@@ -246,15 +260,18 @@ const LockManagementPage = () => {
     );
     setLoading(false);
     clearBatch();
-  }, [selectedKeys, isMasterUnlocked, setManualLockedMonths, toast, clearBatch]);
+  }, [selectedKeys, isMasterUnlocked, user?.id, user?.username, setManualLockedMonths, toast, clearBatch]);
 
   // ── Master key unlock ──────────────────────────────────────────────────
 
-  const handleMasterUnlock = useCallback(() => {
+  const handleMasterUnlock = useCallback(async () => {
     if (!isMasterUnlocked) {
       const pass = window.prompt('🔐 يرجى إدخال كلمة سر المدير لتفعيل المفتاح الرئيسي:');
-      if (pass !== 'admin123') {
-        if (pass !== null) toast.error('❌ كلمة السر غير صحيحة!');
+      if (pass === null) return;
+      try {
+        await invoke('verify_admin_password', { password: pass, userId: user?.id, username: user?.username });
+      } catch (err) {
+        toast.error(`❌ ${err}`);
         return;
       }
     }
@@ -264,7 +281,7 @@ const LockManagementPage = () => {
         ? '🔒 تم إلغاء المفتاح الرئيسي'
         : '🔓 المفتاح الرئيسي مفعّل — جميع الأقفال مفتوحة مؤقتاً'
     );
-  }, [isMasterUnlocked, setIsMasterUnlocked, toast]);
+  }, [isMasterUnlocked, user?.id, user?.username, setIsMasterUnlocked, toast]);
 
   // ── Group months by year ──────────────────────────────────────────────
 
@@ -279,7 +296,7 @@ const LockManagementPage = () => {
 
   // ── Check if a month has data ─────────────────────────────────────────
 
-  const hasData = useCallback((key) => allMonths.includes(key), [allMonths]);
+  const hasData = useCallback((key) => Array.isArray(allMonths) && allMonths.includes(key), [allMonths]);
 
   // ── Rendering ─────────────────────────────────────────────────────────
 

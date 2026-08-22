@@ -7,19 +7,21 @@ import Button from '../../../components/ui/Button';
 import PrintableTable from '../../../components/common/PrintableTable';
 import ExportMenu from '../../../components/ui/ExportMenu';
 import Modal from '../../../components/ui/Modal';
+import MonthInput from '../../../components/ui/MonthInput';
+import AutoComplete from '../../../components/ui/AutoComplete';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
+import { useGlobalApp } from '../../../context/useGlobalApp';
 import html2canvas from 'html2canvas';
-import { exportToExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
+import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import { 
   BarChart3, Calendar, Search, 
   TrendingUp, Pill, Syringe, 
   Layers, LayoutGrid, Clock,
-  ChevronLeft, ChevronRight,
   Filter, Download, ArrowUpRight, ArrowDownRight,
   Grid3X3, Eye, Sparkles, Activity, X, Package
 } from 'lucide-react';
-import { aggregateRecordsByPrice } from '../../../utils/reportUtils';
+import { aggregateRecordsByPrice, buildHierarchyLabel } from '../../../utils/reportUtils';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell, LabelList,
@@ -83,8 +85,63 @@ const getHeatColor = (value, maxVal) => {
   return `rgba(8,145,178,${0.5 + intensity * 0.5})`;
 };
 
+// Synced Top Scrollbar Container Component
+const SyncedTableContainer = ({ children }) => {
+  const topScrollRef = useRef(null);
+  const bottomScrollRef = useRef(null);
+  const [scrollWidth, setScrollWidth] = useState(0);
+
+  useEffect(() => {
+    const checkWidth = () => {
+      if (bottomScrollRef.current) {
+        setScrollWidth(bottomScrollRef.current.scrollWidth);
+      }
+    };
+    checkWidth();
+    const obs = new ResizeObserver(checkWidth);
+    if (bottomScrollRef.current) obs.observe(bottomScrollRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  const handleTopScroll = () => {
+    if (topScrollRef.current && bottomScrollRef.current) {
+      bottomScrollRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+    }
+  };
+
+  const handleBottomScroll = () => {
+    if (topScrollRef.current && bottomScrollRef.current) {
+      topScrollRef.current.scrollLeft = bottomScrollRef.current.scrollLeft;
+    }
+  };
+
+  return (
+    <div className="w-full relative">
+      {scrollWidth > 0 && (
+        <div
+          ref={topScrollRef}
+          onScroll={handleTopScroll}
+          className="overflow-x-auto no-print h-3.5 mb-1 bg-cyan-500/15 dark:bg-slate-800 rounded-lg cursor-pointer"
+          dir="rtl"
+        >
+          <div style={{ width: `${scrollWidth}px`, height: '1px' }} />
+        </div>
+      )}
+      <div
+        ref={bottomScrollRef}
+        onScroll={handleBottomScroll}
+        className="overflow-x-auto"
+        dir="rtl"
+      >
+        {children}
+      </div>
+    </div>
+  );
+};
+
 const TemporalAnalysisHub = () => {
   const toast = useToast();
+  const { workspaceMode: globalWorkspaceMode, hierarchyNames: globalHierarchyNames } = useGlobalApp();
   const [loading, setLoading] = useState(false);
   const [activeReport, setActiveReport] = useState('drugs');
   const [adminMode, setAdminMode] = useState(false);
@@ -751,48 +808,93 @@ const TemporalAnalysisHub = () => {
         return [
           { header: 'اسم الدواء', exportAccessor: r => r.drugName },
           { header: 'التصنيف', exportAccessor: r => r.categoryName },
-          { header: 'الكمية', exportAccessor: r => r.quantity },
-          { header: 'التكلفة', exportAccessor: r => r.total_cost },
+          { header: 'سعر الوحدة', exportAccessor: r => r.unit_price ? `${Number(r.unit_price).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` : '0 ج.م' },
+          { header: 'إجمالي الكمية', exportAccessor: r => (r.quantity || 0).toLocaleString('ar-EG') },
+          { header: 'عدد الحالات', exportAccessor: r => (r.cases_count || 0).toLocaleString('ar-EG') },
+          { header: 'إجمالي التكلفة للفترة', exportAccessor: r => `${(r.total_cost || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
+          { header: 'النسبة المئوية', exportAccessor: r => filteredTotalCost > 0 ? `${(((r.total_cost || 0) / (filteredTotalCost || 1)) * 100).toFixed(1)}%` : '0%' },
         ];
       case 'insulin':
         return [
-          { header: 'الاسم', exportAccessor: r => r.name },
+          { header: 'نوع الإنسولين', exportAccessor: r => r.name },
           { header: 'التصنيف', exportAccessor: r => r.category },
-          { header: 'التكلفة', exportAccessor: r => r.cost },
+          { header: 'النوع', exportAccessor: r => r.type_ },
+          { header: 'سعر الوحدة', exportAccessor: r => r.price ? `${Number(r.price).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` : '0 ج.م' },
+          { header: 'إجمالي الكمية', exportAccessor: r => (r.quantity || 0).toLocaleString('ar-EG') },
+          { header: 'عدد الحالات', exportAccessor: r => (r.cases_count || 0).toLocaleString('ar-EG') },
+          { header: 'إجمالي التكلفة', exportAccessor: r => `${(r.cost || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
         ];
       case 'groups':
         return [
-          { header: 'المجموعة', exportAccessor: r => r.groupName },
-          { header: 'التكلفة', exportAccessor: r => r.cost },
+          { header: 'المجموعة الدوائية', exportAccessor: r => r.groupName },
+          { header: 'التكلفة الإجمالية للفترة', exportAccessor: r => `${(r.cost || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
+          { header: 'النسبة المئوية', exportAccessor: r => filteredTotalCost > 0 ? `${(((r.cost || 0) / (filteredTotalCost || 1)) * 100).toFixed(1)}%` : '0%' },
         ];
       case 'supplies':
         return [
-          { header: adminMode ? 'العيادة' : 'المستلزم', exportAccessor: r => adminMode ? r.category : r.supplyName },
-          { header: 'قيمة المستهلك', exportAccessor: r => r.consumer_value },
-          { header: 'قيمة الجهات', exportAccessor: r => r.collective_entities_value },
-          { header: 'الإجمالي', exportAccessor: r => r.consumer_value + r.collective_entities_value },
+          { header: adminMode ? 'اسم العيادة/الجهة' : 'اسم المستلزم', exportAccessor: r => adminMode ? (r.category || r.supplyName) : r.supplyName },
+          { header: 'قيمة المستهلك', exportAccessor: r => `${(r.consumer_value || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
+          { header: 'قيمة الجهات', exportAccessor: r => `${(r.collective_entities_value || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
+          { header: 'الإجمالي العام', exportAccessor: r => `${((r.consumer_value || 0) + (r.collective_entities_value || 0)).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
         ];
       case 'free_drugs':
-      case 'supported_drugs':
+        if (adminMode) {
+          return [
+            { header: 'جهة/عيادة المنصرف', exportAccessor: r => r.category },
+            { header: 'مجاني - الهيئة', exportAccessor: r => (r.free_authority || 0).toLocaleString('ar-EG') },
+            { header: 'مجاني - الطلاب', exportAccessor: r => (r.free_students || 0).toLocaleString('ar-EG') },
+            { header: 'مجاني - الأطفال', exportAccessor: r => (r.free_infants || 0).toLocaleString('ar-EG') },
+            { header: 'مجاني - المرأة المعيلة', exportAccessor: r => (r.free_women || 0).toLocaleString('ar-EG') },
+            { header: 'إجمالي القيمة للفترة', exportAccessor: r => `${(r.cost || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
+            { header: 'النسبة المئوية', exportAccessor: r => filteredTotalCost > 0 ? `${(((r.cost || 0) / (filteredTotalCost || 1)) * 100).toFixed(1)}%` : '0%' },
+          ];
+        }
         return [
-          { header: adminMode ? 'العيادة' : 'الفئة', exportAccessor: r => r.category },
-          { header: 'القيمة', exportAccessor: r => r.cost },
+          { header: 'الفئة المستهدفة', exportAccessor: r => r.category },
+          { header: 'إجمالي القيمة', exportAccessor: r => `${(r.cost || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
+          { header: 'النسبة المئوية', exportAccessor: r => filteredTotalCost > 0 ? `${(((r.cost || 0) / (filteredTotalCost || 1)) * 100).toFixed(1)}%` : '0%' },
+        ];
+      case 'supported_drugs':
+        if (adminMode) {
+          return [
+            { header: 'جهة/عيادة المنصرف', exportAccessor: r => r.category },
+            { header: 'مدعم - الهيئة (مشاركة)', exportAccessor: r => (r.sup_authority || 0).toLocaleString('ar-EG') },
+            { header: 'مدعم - الطلاب (مشاركة)', exportAccessor: r => (r.sup_students || 0).toLocaleString('ar-EG') },
+            { header: 'مدعم - الأطفال (مشاركة)', exportAccessor: r => (r.sup_infants || 0).toLocaleString('ar-EG') },
+            { header: 'حصة المريض المحصلة', exportAccessor: r => (r.sup_patient_share || 0).toLocaleString('ar-EG') },
+            { header: 'إجمالي القيمة للفترة', exportAccessor: r => `${(r.cost || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
+            { header: 'النسبة المئوية', exportAccessor: r => filteredTotalCost > 0 ? `${(((r.cost || 0) / (filteredTotalCost || 1)) * 100).toFixed(1)}%` : '0%' },
+          ];
+        }
+        return [
+          { header: 'الفئة المستهدفة', exportAccessor: r => r.category },
+          { header: 'إجمالي القيمة', exportAccessor: r => `${(r.cost || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
+          { header: 'النسبة المئوية', exportAccessor: r => filteredTotalCost > 0 ? `${(((r.cost || 0) / (filteredTotalCost || 1)) * 100).toFixed(1)}%` : '0%' },
         ];
       case 'cost':
         return [
           { header: activeFilter === 'all' ? 'التصنيف' : 'الشهر', exportAccessor: r => activeFilter === 'all' ? r.category : r.month },
-          { header: 'التكلفة الإجمالية', exportAccessor: r => r.cost },
+          { header: 'التكلفة الإجمالية', exportAccessor: r => `${(r.cost || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م` },
+        ];
+      case 'comparison':
+        return [
+          { header: 'العنصر', exportAccessor: r => r.name },
+          { header: `شهر (${range.start})`, exportAccessor: r => (r.val1 || 0).toLocaleString('ar-EG') },
+          { header: `شهر (${range.end})`, exportAccessor: r => (r.val2 || 0).toLocaleString('ar-EG') },
+          { header: 'فارق التغير', exportAccessor: r => ((r.val2 || 0) - (r.val1 || 0)).toLocaleString('ar-EG') },
         ];
       case 'reorder':
         return [
           { header: 'اسم الدواء', exportAccessor: r => r.drugName },
           { header: 'التصنيف', exportAccessor: r => r.categoryName },
-          { header: 'المتوسط الشهري', exportAccessor: r => parseFloat(r.avgQuantity.toFixed(1)) },
+          { header: 'المتوسط الشهري', exportAccessor: r => (r.avgQuantity || 0).toLocaleString('ar-EG', { maximumFractionDigits: 1 }) },
           { header: 'شهر الذروة', exportAccessor: r => r.peakMonth },
-          { header: 'الكمية المقترحة', exportAccessor: r => r.suggestedOrder },
+          { header: 'الكمية المقترحة', exportAccessor: r => (r.suggestedOrder || 0).toLocaleString('ar-EG') },
         ];
+      default:
+        return [];
     }
-  }, [activeReport, activeFilter, adminMode]);
+  }, [activeReport, activeFilter, adminMode, range, filteredTotalCost]);
 
   const handleCustomExport = async (format, { data, columns, options }) => {
     // Let ExportMenu handle print natively (opens PrintSettingsModal)
@@ -807,10 +909,58 @@ const TemporalAnalysisHub = () => {
         console.error('Failed to capture chart:', err);
       }
     }
-    if (format === 'excel') await exportToExcel(data, columns, { ...options, chartImage });
-    else if (format === 'word') await exportToWord(data, columns, { ...options, chartImage });
-    else if (format === 'pdf') await exportToPDF(data, columns, { ...options, chartImage });
-    else return false;
+    if (format === 'excel') {
+      // Use multi-sheet export with summary + chart
+      const reportLabel = REPORT_TYPES.find(r => r.id === activeReport)?.label || '';
+      const totalCost = data.reduce((s, r) => {
+        const val = parseFloat(String(r.cost || r.total_cost || 0).replace(/,/g, ''));
+        return s + (isNaN(val) ? 0 : val);
+      }, 0);
+      const periodStr = `الفترة من: ${range.start} إلى: ${range.end}`;
+      const exportOpts = {
+        ...options,
+        chartImage,
+        hierarchyLabel: getEntityName(),
+        periodLabel: periodStr,
+        startMonth: range.start,
+        endMonth: range.end,
+        subtitle: options.subtitle || `الجهة: ${getEntityName()} | ${periodStr}`
+      };
+      const sheetsData = {
+        'التقرير الرئيسي': { data, columns, options: exportOpts },
+      };
+      await exportMultiSheetExcel(sheetsData, {
+        fileName: options.fileName || 'temporal_' + activeReport,
+        title: options.title || 'التحليل الزمني - ' + reportLabel,
+        periodLabel: periodStr,
+        hierarchyLabel: getEntityName(),
+        chartImage,
+        summaryData: {
+          headers: ['المؤشر', 'القيمة'],
+          rows: [
+            ['نوع التقرير', reportLabel],
+            ['النطاق الإداري', getEntityName()],
+            ['عدد السجلات', String(data.length)],
+            ['إجمالي التكلفة', totalCost.toLocaleString() + ' ج.م'],
+            ['الفترة الزمنية', periodStr],
+          ],
+        },
+      });
+    } else {
+      const periodStr = `الفترة من: ${range.start} إلى: ${range.end}`;
+      const exportOpts = {
+        ...options,
+        chartImage,
+        hierarchyLabel: getEntityName(),
+        periodLabel: periodStr,
+        startMonth: range.start,
+        endMonth: range.end,
+        subtitle: options.subtitle || `الجهة: ${getEntityName()} | ${periodStr}`
+      };
+      if (format === 'word') await exportToWord(data, columns, exportOpts);
+      else if (format === 'pdf') await exportToPDF(data, columns, exportOpts);
+      else return false;
+    }
 
     return true;
   };
@@ -823,7 +973,7 @@ const TemporalAnalysisHub = () => {
         <PageHeader 
           title="مركز التحليل الزمني الشامل" 
           icon={BarChart3} 
-          description="تحليل متقدم للمنصرف عبر فترات زمنية مخصصة مع تجميع ذكي للبيانات المالية والكمية."
+          description="تحليل متتقدم للمنصرف عبر فترات زمنية مخصصة مع تجميع ذكي للبيانات المالية والكمية."
           actions={
             <ExportMenu 
               data={filteredData} 
@@ -832,7 +982,11 @@ const TemporalAnalysisHub = () => {
               options={{ 
                 title: `تقرير التحليل الزمني - ${REPORT_TYPES.find(r => r.id === activeReport)?.label}`, 
                 fileName: `temporal_${activeReport}`,
-                subtitle: `الجهة: ${getEntityName()} | الفترة: ${range.start} إلى ${range.end}`
+                hierarchyLabel: getEntityName(),
+                periodLabel: `الفترة من: ${range.start} إلى: ${range.end}`,
+                startMonth: range.start,
+                endMonth: range.end,
+                subtitle: `الجهة: ${getEntityName()} | الفترة من: ${range.start} إلى: ${range.end}`
               }} 
             />
           }
@@ -843,7 +997,7 @@ const TemporalAnalysisHub = () => {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           <div className="lg:col-span-7">
             <HierarchySelector 
-              onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+              onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
               initialBranch={hierarchy.branchId}
               hideMonth 
             />
@@ -853,28 +1007,17 @@ const TemporalAnalysisHub = () => {
                 <Calendar size={14} />
                 <span>نطاق التحليل الزمني</span>
              </div>
-             <div className="grid grid-cols-1 sm:grid-cols-11 items-center gap-3 bg-[var(--color-bg)] p-4 rounded-3xl border border-[var(--color-border)] shadow-inner">
-                <div className="sm:col-span-5 w-full space-y-1">
-                  <label className="block text-[10px] font-black text-[var(--color-text-muted)] mr-2">من شهر</label>
-                  <input 
-                    type="month" 
-                    className="w-full h-11 px-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text)] outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 transition-all text-sm font-bold"
-                    value={range.start}
-                    onChange={(e) => setRange({...range, start: e.target.value})}
-                  />
-                </div>
-                <div className="sm:col-span-1 flex justify-center pt-5 hidden sm:flex">
-                  <ChevronLeft className="text-[var(--color-primary)]" size={14} />
-                </div>
-                <div className="sm:col-span-5 w-full space-y-1">
-                  <label className="block text-[10px] font-black text-[var(--color-text-muted)] mr-2">إلى شهر</label>
-                  <input 
-                    type="month" 
-                    className="w-full h-11 px-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text)] outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 transition-all text-sm font-bold"
-                    value={range.end}
-                    onChange={(e) => setRange({...range, end: e.target.value})}
-                  />
-                </div>
+             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-[var(--color-bg)] p-4 rounded-3xl border border-[var(--color-border)] shadow-inner">
+                <MonthInput
+                  label="من شهر"
+                  value={range.start}
+                  onChange={(e) => setRange({...range, start: e.target.value})}
+                />
+                <MonthInput
+                  label="إلى شهر"
+                  value={range.end}
+                  onChange={(e) => setRange({...range, end: e.target.value})}
+                />
              </div>
              <div className="flex flex-wrap gap-2 pt-2">
                 {[
@@ -903,26 +1046,26 @@ const TemporalAnalysisHub = () => {
         </div>
       </Card>
 
-      <div className="flex items-center justify-between no-print gap-3">
-        <div className="flex flex-wrap gap-3">
-          {REPORT_TYPES.map(type => (
-            <button
-              key={type.id}
-              onClick={() => { setActiveReport(type.id); setData([]); setActiveFilter('all'); }}
-              className={`flex items-center gap-3 px-6 py-4 rounded-2xl transition-all border-2 ${activeReport === type.id ? 'shadow-lg scale-105' : 'bg-[var(--color-bg-card)] border-transparent text-[var(--color-text-muted)]'}`}
-              style={activeReport === type.id ? { backgroundColor: type.color, borderColor: type.color, color: 'white' } : {}}
-            >
-              <type.icon size={20} />
-              <span className="font-black">{type.label}</span>
-            </button>
-          ))}
+      {/* ─── Report Selection Box (AutoComplete Supporting Long Names) ─── */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between no-print gap-4 bg-[var(--color-bg-card)] p-5 rounded-3xl border border-[var(--color-border)] shadow-md">
+        <div className="flex-1 max-w-xl">
+          <AutoComplete
+            value={activeReport}
+            onChange={(id) => { if (id) { setActiveReport(id); setData([]); setActiveFilter('all'); } }}
+            options={REPORT_TYPES}
+            getOptionLabel={(r) => r.label}
+            getOptionValue={(r) => r.id}
+            label="نوع تقرير التحليل الزمني"
+            placeholder="اختر نوع التقرير الإحصائي..."
+            icon={BarChart3}
+          />
         </div>
 
         {['free_drugs', 'supported_drugs', 'supplies'].includes(activeReport) && (
-          <div className="flex items-center gap-3 bg-[var(--color-bg-card)] p-2 px-4 rounded-2xl border border-[var(--color-border)] shadow-sm">
+          <div className="flex items-center gap-3 bg-[var(--color-bg)] p-3 px-5 rounded-2xl border border-[var(--color-border)] shadow-sm shrink-0">
             <div className="flex flex-col items-end">
-              <span className="text-[10px] font-black text-[var(--color-primary)]">الوضع الإداري</span>
-              <span className="text-[8px] text-[var(--color-text-muted)]">عرض تفاصيل العيادات</span>
+              <span className="text-xs font-black text-cyan-600 dark:text-cyan-400">الوضع الإداري التفصيلي</span>
+              <span className="text-[10px] text-[var(--color-text-muted)]">تفاصيل العيادات والتوزيع الفئوي</span>
             </div>
             <label className="relative inline-flex items-center cursor-pointer">
               <input 
@@ -931,7 +1074,7 @@ const TemporalAnalysisHub = () => {
                 checked={adminMode}
                 onChange={() => { setAdminMode(!adminMode); setData([]); }}
               />
-              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--color-primary)]"></div>
+              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-600"></div>
             </label>
           </div>
         )}
@@ -1050,96 +1193,10 @@ const TemporalAnalysisHub = () => {
             </Card>
           )}
 
-          {/* ── Chart Mode Toggle ── */}
-          {activeReport !== 'comparison' && (
-            <div className="flex items-center gap-2 no-print">
-              <button onClick={() => setChartMode('bar')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${chartMode === 'bar' ? 'bg-[var(--color-primary)] text-white shadow' : 'bg-[var(--color-bg-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'}`}>
-                <BarChart3 size={14} /> الرسوم البيانية
-              </button>
-              <button onClick={() => setChartMode('heatmap')} disabled={!heatmapData} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${!heatmapData ? 'opacity-30 cursor-not-allowed' : ''} ${chartMode === 'heatmap' ? 'bg-cyan-600 text-white shadow' : 'bg-[var(--color-bg-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'}`}>
-                <Grid3X3 size={14} /> الخريطة الحرارية
-              </button>
-            </div>
-          )}
-
-          {/* ── Feature 3: Heatmap Matrix ── */}
-          {chartMode === 'heatmap' && heatmapData && (
-            <Card className="p-6 border-none shadow-xl no-print overflow-x-auto">
-              <h3 className="font-black text-sm text-[var(--color-text)] mb-4 flex items-center gap-2">
-                <Grid3X3 size={18} className="text-cyan-500" /> الخريطة الحرارية - كثافة الاستهلاك
-              </h3>
-              <div className="overflow-x-auto" dir="rtl">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr>
-                      <th className="px-3 py-2 text-right font-black text-[var(--color-text-muted)] sticky right-0 bg-[var(--color-bg-card)] z-10 min-w-[140px]">التصنيف</th>
-                      {heatmapData.months.map(m => <th key={m} className="px-2 py-2 text-center font-bold text-[var(--color-text-muted)] whitespace-nowrap">{m}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {heatmapData.categories.map((cat, ri) => (
-                      <tr key={cat} className="border-t border-[var(--color-border)]/30">
-                        <td className="px-3 py-2 font-bold text-[var(--color-text)] sticky right-0 bg-[var(--color-bg-card)] z-10 truncate max-w-[180px]" title={cat}>{cat}</td>
-                        {heatmapData.matrix[ri].map((val, ci) => (
-                          <td key={ci} className="px-1 py-1 text-center">
-                            <div className="mx-auto w-full min-w-[50px] py-2 rounded-lg font-bold text-[10px] transition-all hover:scale-110 cursor-default" style={{ background: getHeatColor(val, heatmapData.maxVal), color: val > heatmapData.maxVal * 0.5 ? 'white' : 'var(--color-text)' }} title={`${cat} - ${heatmapData.months[ci]}: ${val.toLocaleString()} ج.م`}>
-                              {val > 0 ? val.toLocaleString() : '-'}
-                            </div>
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
-
-          {/* ── Original Charts (Bar + Pie) ── */}
-          {chartMode === 'bar' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 no-print">
-            <Card className="p-6 border-none shadow-xl">
-              <h3 className="font-black text-sm text-[var(--color-text)] mb-6 flex items-center gap-2">
-                <BarChart3 size={18} className="text-[var(--color-primary)]" /> توزيع القيم والتكاليف
-              </h3>
-              <div ref={chartRef} style={{ width: '100%', height: 350, backgroundColor: '#ffffff', padding: '10px', borderRadius: '12px' }} dir="ltr">
-                <ResponsiveContainer>
-                  <BarChart data={filteredData.slice(0, 15)} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                    <XAxis type="number" hide />
-                    <YAxis type="category" dataKey={(r) => getItemName(r)} width={120} tick={{ fontSize: 10, fontWeight: 'bold', fill: '#475569' }} axisLine={false} tickLine={false} />
-                    <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 10px 15px rgba(0,0,0,0.05)', direction: 'rtl' }} formatter={(val) => [val.toLocaleString() + ' ج.م', 'القيمة']} />
-                    <Bar dataKey={(r) => getItemValue(r)} radius={[0, 6, 6, 0]} barSize={16}>
-                      {filteredData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                      <LabelList dataKey={(r) => getItemValue(r)} position="right" formatter={(v) => v.toLocaleString()} style={{ fontSize: 10, fontWeight: 'bold', fill: '#64748b' }} />
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-
-            <Card className="p-6 border-none shadow-xl">
-              <h3 className="font-black text-sm text-[var(--color-text)] mb-6 flex items-center gap-2">
-                <TrendingUp size={18} className="text-emerald-500" /> النسب المئوية للتحليل
-              </h3>
-              <div style={{ width: '100%', height: 350 }} dir="ltr">
-                <ResponsiveContainer>
-                  <PieChart>
-                    <Pie data={filteredData.slice(0, 10).filter(d => getItemValue(d) > 0)} innerRadius={80} outerRadius={120} paddingAngle={4} dataKey={(r) => getItemValue(r)} nameKey={(r) => getItemName(r)} label={({ name, percent }) => `${name} (${(percent * 100).toFixed(1)}%)`}>
-                      {filteredData.slice(0, 10).map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip formatter={(val) => val.toLocaleString() + ' ج.م'} contentStyle={{ direction: 'rtl' }} />
-                    <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '11px', fontWeight: 'bold' }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-          </div>
-          )}
-
+          {/* ── Main Data Table Card (Shown First) ── */}
           <Card className="p-0 overflow-hidden shadow-2xl border-none print:shadow-none">
             <div className="print:hidden">
-              <div className="overflow-x-auto">
+              <SyncedTableContainer>
                 <table className="w-full text-sm text-right" dir="rtl">
                   <thead className="text-xs text-white uppercase" style={{ background: 'linear-gradient(135deg, var(--color-primary), var(--color-primary-dark, #0e7490))' }}>
                     <tr>
@@ -1186,11 +1243,11 @@ const TemporalAnalysisHub = () => {
                     </tr>
                   </tfoot>
                 </table>
-              </div>
+              </SyncedTableContainer>
             </div>
 
             <div className="hidden print:block">
-               <PrintableTable title={`تقرير التحليل الزمني - ${REPORT_TYPES.find(r => r.id === activeReport)?.label}`} subtitle={`النطاق الزمني: ${range.start} إلى ${range.end} | الجهة: ${getEntityName()}`}>
+               <PrintableTable title={`تقرير التحليل الزمني - ${REPORT_TYPES.find(r => r.id === activeReport)?.label}`} subtitle={`النطاق الزمني: ${range.start} إلى ${range.end} | الجهة: ${getEntityName()}`} hierarchyLabel={buildHierarchyLabel(globalWorkspaceMode, globalHierarchyNames)}>
                   <table className="w-full border-collapse" dir="rtl">
                     <thead>
                       <tr className="bg-slate-200 border-b-2 border-black">
@@ -1224,6 +1281,136 @@ const TemporalAnalysisHub = () => {
                </PrintableTable>
             </div>
           </Card>
+
+          {/* ── Chart Mode Toggle & Charts Section (Placed Below Table) ── */}
+          {activeReport !== 'comparison' && (
+            <div className="flex items-center justify-between no-print pt-4 border-t border-[var(--color-border)]">
+              <div className="flex items-center gap-2">
+                <button onClick={() => setChartMode('bar')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${chartMode === 'bar' ? 'bg-[var(--color-primary)] text-white shadow' : 'bg-[var(--color-bg-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'}`}>
+                  <BarChart3 size={14} /> الرسوم البيانية المنظمة
+                </button>
+                <button onClick={() => setChartMode('heatmap')} disabled={!heatmapData} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${!heatmapData ? 'opacity-30 cursor-not-allowed' : ''} ${chartMode === 'heatmap' ? 'bg-cyan-600 text-white shadow' : 'bg-[var(--color-bg-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'}`}>
+                  <Grid3X3 size={14} /> الخريطة الحرارية
+                </button>
+              </div>
+              <span className="text-[10px] font-bold text-[var(--color-text-muted)]">الرسم التوضيحي للنتائج أعلى 15 عنصر</span>
+            </div>
+          )}
+
+          {/* ── Feature 3: Heatmap Matrix ── */}
+          {chartMode === 'heatmap' && heatmapData && (
+            <Card className="p-6 border-none shadow-xl no-print overflow-x-auto">
+              <h3 className="font-black text-sm text-[var(--color-text)] mb-4 flex items-center gap-2">
+                <Grid3X3 size={18} className="text-cyan-500" /> الخريطة الحرارية - كثافة الاستهلاك
+              </h3>
+              <div className="overflow-x-auto" dir="rtl">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr>
+                      <th className="px-3 py-2 text-right font-black text-[var(--color-text-muted)] sticky right-0 bg-[var(--color-bg-card)] z-10 min-w-[140px]">التصنيف</th>
+                      {heatmapData.months.map(m => <th key={m} className="px-2 py-2 text-center font-bold text-[var(--color-text-muted)] whitespace-nowrap">{m}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {heatmapData.categories.map((cat, ri) => (
+                      <tr key={cat} className="border-t border-[var(--color-border)]/30">
+                        <td className="px-3 py-2 font-bold text-[var(--color-text)] sticky right-0 bg-[var(--color-bg-card)] z-10 truncate max-w-[180px]" title={cat}>{cat}</td>
+                        {heatmapData.matrix[ri].map((val, ci) => (
+                          <td key={ci} className="px-1 py-1 text-center">
+                            <div className="mx-auto w-full min-w-[50px] py-2 rounded-lg font-bold text-[10px] transition-all hover:scale-110 cursor-default" style={{ background: getHeatColor(val, heatmapData.maxVal), color: val > heatmapData.maxVal * 0.5 ? 'white' : 'var(--color-text)' }} title={`${cat} - ${heatmapData.months[ci]}: ${val.toLocaleString()} ج.م`}>
+                              {val > 0 ? val.toLocaleString() : '-'}
+                            </div>
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
+          {/* ── Refactored Charts (Bar + Pie with Truncation & Margins Below Table) ── */}
+          {chartMode === 'bar' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 no-print">
+            <Card className="p-6 border-none shadow-xl bg-white dark:bg-slate-900">
+              <h3 className="font-black text-sm text-[var(--color-text)] mb-6 flex items-center gap-2">
+                <BarChart3 size={18} className="text-[var(--color-primary)]" /> توزيع القيم والتكاليف
+              </h3>
+              <div ref={chartRef} style={{ width: '100%', height: 400, backgroundColor: '#ffffff', padding: '12px', borderRadius: '16px' }} dir="ltr">
+                <ResponsiveContainer>
+                  <BarChart data={filteredData.slice(0, 15)} layout="vertical" margin={{ top: 10, right: 40, left: 10, bottom: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+                    <XAxis type="number" hide />
+                    <YAxis
+                      type="category"
+                      dataKey={(r) => getItemName(r)}
+                      width={190}
+                      tick={({ x, y, payload }) => {
+                        const fullText = payload.value || '';
+                        const truncated = fullText.length > 24 ? fullText.substring(0, 24) + '...' : fullText;
+                        return (
+                          <g transform={`translate(${x},${y})`}>
+                            <text x={-6} y={3} dy={0} textAnchor="end" fill="#334155" fontSize={10} fontWeight="bold">
+                              <title>{fullText}</title>
+                              {truncated}
+                            </text>
+                          </g>
+                        );
+                      }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px rgba(0,0,0,0.1)', direction: 'rtl' }}
+                      formatter={(val, name, props) => [val.toLocaleString() + ' ج.م', props.payload ? getItemName(props.payload) : 'العنصر']}
+                    />
+                    <Bar dataKey={(r) => getItemValue(r)} radius={[0, 6, 6, 0]} barSize={18}>
+                      {filteredData.slice(0, 15).map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                      <LabelList dataKey={(r) => getItemValue(r)} position="right" formatter={(v) => v.toLocaleString()} style={{ fontSize: 10, fontWeight: 'bold', fill: '#0891b2' }} />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+
+            <Card className="p-6 border-none shadow-xl bg-white dark:bg-slate-900">
+              <h3 className="font-black text-sm text-[var(--color-text)] mb-6 flex items-center gap-2">
+                <TrendingUp size={18} className="text-emerald-500" /> النسب المئوية للتحليل
+              </h3>
+              <div style={{ width: '100%', height: 400, backgroundColor: '#ffffff', padding: '12px', borderRadius: '16px' }} dir="ltr">
+                <ResponsiveContainer>
+                  <PieChart>
+                    <Pie
+                      data={filteredData.slice(0, 10).filter(d => getItemValue(d) > 0)}
+                      innerRadius={65}
+                      outerRadius={105}
+                      paddingAngle={3}
+                      dataKey={(r) => getItemValue(r)}
+                      nameKey={(r) => getItemName(r)}
+                    >
+                      {filteredData.slice(0, 10).map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip
+                      formatter={(val, name) => [val.toLocaleString() + ' ج.م', name]}
+                      contentStyle={{ direction: 'rtl', borderRadius: '12px', border: '1px solid #e2e8f0' }}
+                    />
+                    <Legend
+                      verticalAlign="bottom"
+                      height={70}
+                      iconType="circle"
+                      formatter={(value) => (
+                        <span style={{ fontSize: '10px', fontWeight: 'bold', color: '#475569' }} title={value}>
+                          {value.length > 20 ? value.substring(0, 20) + '...' : value}
+                        </span>
+                      )}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+          </div>
+          )}
         </div>
       )}
 

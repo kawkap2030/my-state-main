@@ -5,13 +5,14 @@ import { TrendingUp, TrendingDown, Minus, Target, Award } from "lucide-react";
 const getPerformanceStyle = (trend) => {
   if (trend === "up") return { badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400", icon: TrendingUp, label: "ارتفاع" };
   if (trend === "down") return { badge: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-400", icon: TrendingDown, label: "انخفاض" };
+  if (trend === "none") return { badge: "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400", icon: Minus, label: "لا توجد بيانات للمقارنة" };
   return { badge: "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400", icon: Minus, label: "ثبات" };
 };
 
 const formatNumber = (num) => {
   if (typeof num !== "number" && typeof num !== "string") return "0";
   const n = typeof num === "string" ? parseFloat(num.replace(/,/g, "")) : num;
-  if (isNaN(n)) return "0";
+  if (isNaN(n)) return num; // e.g. "غير متاح" → show the label as-is
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(2) + " مليار";
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + " مليون";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + " ألف";

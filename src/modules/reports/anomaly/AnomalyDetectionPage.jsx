@@ -231,69 +231,43 @@ const AnomalyDetectionPage = () => {
         return true;
       }
 
-      // Word & PDF: We build a combined flat data with a single schema
-      const combinedColumns = [
-        { header: 'نوع التنبيه', accessor: 'alertType' },
-        { header: 'البيان الرئيسي', accessor: 'mainLabel' },
-        { header: 'المؤشر الأول', accessor: 'metric1' },
-        { header: 'المؤشر الثاني', accessor: 'metric2' },
-        { header: 'النتيجة / الحالة', accessor: 'result' }
-      ];
+      // Word & PDF: mirror the Excel sheets as separate titled tables
+      const outlierColsDef = OUTLIER_COLS_DEF.filter(d => outlierCols[d.id]).map(d => ({
+        header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
+        accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
+      }));
+      const ticketColsDef = TICKET_COLS_DEF.filter(d => ticketCols[d.id]).map(d => ({
+        header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
+        accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
+      }));
+      const surgeColsDef = SURGE_COLS_DEF.filter(d => surgeCols[d.id]).map(d => ({
+        header: d.label === 'نسبة التجاوز' ? 'نسبة النمو %' : d.label,
+        accessor: d.label === 'نسبة التجاوز' ? 'نسبة النمو %' : d.label
+      }));
 
-      const combinedRows = [];
-
-      // Summary header row
-      combinedRows.push({
-        alertType: `إجمالي حالات الخطر الحرج: ${kpis.critical} | العيادات الشاذة: ${kpis.outliers} | انحراف التذاكر: ${kpis.mismatches} | النمو المفاجئ: ${kpis.surges}`,
-        mainLabel: 'ملخص مؤشرات الفحص',
-        metric1: `شهر التحليل: ${month}`,
-        metric2: '',
-        result: ''
-      });
-
-      data.clinic_outliers.forEach(o => {
-        combinedRows.push({
-          alertType: 'عيادة شاذة استهلاكياً',
-          mainLabel: `${o.clinic_name} - ${o.drug_name}`,
-          metric1: `الكمية: ${o.actual_qty.toLocaleString()}`,
-          metric2: `المتوسط: ${o.avg_qty.toFixed(1)}`,
-          result: `تجاوز: ${o.deviation_pct.toFixed(1)}% (${o.deviation_pct >= 300 ? 'خطر حرج' : o.deviation_pct >= 200 ? 'تنبيه عالي' : 'مراقبة'})`
-        });
-      });
-
-      data.ticket_mismatches.forEach(t => {
-        combinedRows.push({
-          alertType: 'انحراف تذاكر/تكلفة',
-          mainLabel: t.clinic_name,
-          metric1: `التكلفة: ${t.total_cost.toLocaleString()} ج.م`,
-          metric2: `سعر التذكرة: ${t.cost_per_ticket.toFixed(1)} ج.م (المتوسط: ${t.avg_cost_per_ticket.toFixed(1)} ج.م)`,
-          result: `تجاوز: ${t.deviation_pct.toFixed(1)}%`
-        });
-      });
-
-      data.surge_drugs.forEach(s => {
-        combinedRows.push({
-          alertType: 'نمو مفاجئ للصنف',
-          mainLabel: s.drug_name,
-          metric1: `الحالي: ${s.current_cost.toLocaleString()} ج.م`,
-          metric2: `السابق: ${s.previous_cost.toLocaleString()} ج.م`,
-          result: `نمو: +${s.growth_pct.toFixed(1)}%`
-        });
-      });
+      const multiTables = [];
+      if (outRows.length > 0) multiTables.push({ data: outRows, columns: outlierColsDef, title: 'العيادات الشاذة استهلاكياً' });
+      if (tickRows.length > 0) multiTables.push({ data: tickRows, columns: ticketColsDef, title: 'انحراف التذاكر' });
+      if (surgeRows.length > 0) multiTables.push({ data: surgeRows, columns: surgeColsDef, title: 'أصناف النمو المفاجئ' });
 
       const exportOptions = {
         ...options,
         title: `تقرير رصد الانحرافات والأنماط الشاذة - ${month}`,
         fileName: `anomaly_report_${month}`,
-        subtitle: `إجمالي حالات التنبيه: ${combinedRows.length - 1} حالة مكتشفة`
+        subtitle: `إجمالي حالات التنبيه: ${kpis.outliers + kpis.mismatches + kpis.surges} حالة مكتشفة`,
       };
+      // Guard: only pass tables when at least one sheet has data — an empty
+      // array would render NO tables in the Word engine ([] is truthy).
+      const wordPdfOptions = multiTables.length > 0
+        ? { ...exportOptions, tables: multiTables }
+        : exportOptions;
 
       if (type === 'word') {
-        exportToWord(combinedRows, combinedColumns, exportOptions);
+        exportToWord(outRows, outlierColsDef, wordPdfOptions);
         return true;
       }
       if (type === 'pdf') {
-        await exportToPDF(combinedRows, combinedColumns, exportOptions);
+        await exportToPDF(outRows, outlierColsDef, wordPdfOptions);
         return true;
       }
 
@@ -334,11 +308,11 @@ const AnomalyDetectionPage = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-end">
           <div className="lg:col-span-2">
             <HierarchySelector
-              onSelectionChange={(d) => setHierarchy({ ...hierarchy, ...d })}
+              onSelectionChange={(d) => setHierarchy(prev => ({ ...prev, ...d }))}
               initialBranch={hierarchy.branchId}
               initialArea={hierarchy.areaId}
               initialClinic={hierarchy.clinicId}
-              showMonthPicker={false}
+              hideMonth
             />
           </div>
           <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] p-3.5 rounded-2xl flex flex-col gap-1.5">

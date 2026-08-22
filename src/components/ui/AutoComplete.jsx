@@ -18,6 +18,13 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Search, X, ChevronDown, Loader2 } from 'lucide-react';
 
+// Stable module-level defaults: passing these as default props means their identity
+// NEVER changes between renders. Inline defaults were recreated on every render,
+// which made the selectedOption/filteredOptions memos and the searchQuery sync effect
+// run on every render (constant input flicker — the "shaking" while selecting).
+const DEFAULT_GET_LABEL = (opt) => opt?.name || opt?.label || String(opt);
+const DEFAULT_GET_VALUE = (opt) => opt?.id ?? opt?.value ?? opt;
+
 const AutoComplete = ({
   value,
   onChange,
@@ -29,8 +36,8 @@ const AutoComplete = ({
   loading = false,
   error,
   noResultsText = 'لا توجد نتائج',
-  getOptionLabel = (opt) => opt?.name || opt?.label || String(opt),
-  getOptionValue = (opt) => opt?.id ?? opt?.value ?? opt,
+  getOptionLabel = DEFAULT_GET_LABEL,
+  getOptionValue = DEFAULT_GET_VALUE,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -56,17 +63,14 @@ const AutoComplete = ({
     });
   }, [searchQuery, options, getOptionLabel]);
 
-  // ── Sync visual input with selected value ───────────────────────────────
-  useEffect(() => {
-    if (!isOpen) {
-      setSearchQuery(selectedOption ? getOptionLabel(selectedOption) : '');
-    }
-  }, [selectedOption, isOpen, getOptionLabel]);
+  // Clamp the highlighted index so a shrinking list (typing / async load) can
+  // never leave the selection pointer outside the visible options.
+  const safeHighlightedIndex = Math.min(highlightedIndex, Math.max(0, filteredOptions.length - 1));
 
-  // ── Reset highlighted index when filtered list changes ──────────────────
-  useEffect(() => {
-    setHighlightedIndex(0);
-  }, [filteredOptions.length]);
+  // The visible input text is DERIVED during render: while the dropdown is open
+  // we show what the user typed (searchQuery); once closed we show the selected
+  // option's label. No effect-based state sync here — effects that call setState
+  // synchronously trigger cascading renders (the "shaking" while selecting).
 
   // ── Close on outside click ──────────────────────────────────────────────
   useEffect(() => {
@@ -83,22 +87,20 @@ const AutoComplete = ({
   useEffect(() => {
     if (isOpen && listRef.current) {
       const items = listRef.current.querySelectorAll('[data-autocomplete-item]');
-      if (items[highlightedIndex]) {
-        items[highlightedIndex].scrollIntoView({ block: 'nearest' });
+      if (items[safeHighlightedIndex]) {
+        items[safeHighlightedIndex].scrollIntoView({ block: 'nearest' });
       }
     }
-  }, [highlightedIndex, isOpen]);
+  }, [safeHighlightedIndex, isOpen]);
 
   // ── Open dropdown and focus input ───────────────────────────────────────
   const open = useCallback(() => {
     if (disabled) return;
     setIsOpen(true);
-    // Don't show the search value yet — it's set by the effect above
-    // after the state update, which will clear the search query
-    // Actually, the effect clears searchQuery when isOpen becomes false.
-    // When isOpen becomes true, we should set searchQuery to what's
-    // currently displayed in the input (which is the selected option label)
+    // When the dropdown opens, seed the search box with the currently
+    // displayed label so typing continues from the selected option.
     setSearchQuery(selectedOption ? getOptionLabel(selectedOption) : '');
+    setHighlightedIndex(0);
   }, [disabled, selectedOption, getOptionLabel]);
 
   // ── Select an option ────────────────────────────────────────────────────
@@ -148,26 +150,15 @@ const AutoComplete = ({
   const handleInputChange = useCallback((e) => {
     const val = e.target.value;
     setSearchQuery(val);
+    setHighlightedIndex(0);
     if (!isOpen) setIsOpen(true);
-    // If the input is cleared and matches no option, clear the value
-    if (val === '' && value !== '') {
-      // Don't immediately clear — user might be typing
-      // Only clear on blur or explicit selection
-    }
-  }, [isOpen, value]);
+  }, [isOpen]);
 
-  // ── Handle blur — restore label if no option selected ───────────────────
+  // ── Handle blur — label restoration is handled by the derived input value ──
   const handleBlur = useCallback(() => {
-    // Wait for click events to process before closing
-    setTimeout(() => {
-      if (!isOpen) {
-        // Restore the selected label if nothing matched
-        if (!selectedOption && value) {
-          // Value set but no matching option found (e.g., initial load)
-        }
-      }
-    }, 200);
-  }, [isOpen, selectedOption, value]);
+    // No state changes needed: when closed, the input shows the selected option's
+    // label via the derived value, and the placeholder when nothing is selected.
+  }, []);
 
   // ── Highlight matching text for search ──────────────────────────────────
   const highlightMatch = (text, query) => {
@@ -196,7 +187,7 @@ const AutoComplete = ({
 
       {/* Input Area */}
       <div
-        className={`relative flex items-center rounded-xl border transition-all duration-200 cursor-text
+        className={`relative flex items-center rounded-xl border transition-all duration-200 cursor-text overflow-hidden
           ${error ? 'border-red-400' : ''}
           ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
         `}
@@ -222,14 +213,15 @@ const AutoComplete = ({
         <input
           ref={inputRef}
           type="text"
-          value={searchQuery}
+          value={isOpen ? searchQuery : (selectedOption ? getOptionLabel(selectedOption) : '')}
           onChange={handleInputChange}
           onFocus={open}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
           placeholder={hasValue ? '' : placeholder}
           disabled={disabled}
-          className="flex-1 bg-transparent border-none outline-none text-sm font-bold py-3 pl-1"
+          title={selectedOption ? getOptionLabel(selectedOption) : ''}
+          className="flex-1 min-w-0 bg-transparent border-none outline-none text-sm font-bold py-3 pl-1 truncate"
           style={{ color: 'var(--color-text)' }}
           autoComplete="off"
           spellCheck={false}
@@ -246,21 +238,21 @@ const AutoComplete = ({
         {hasValue && !loading && (
           <button
             onClick={clear}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg cursor-pointer transition-all duration-150 hover:bg-red-50 hover:text-red-500"
+            className="flex items-center gap-1 px-2 py-1 rounded-lg cursor-pointer transition-all duration-150 hover:bg-red-50 hover:text-red-500 shrink-0"
             style={{ color: 'var(--color-text-muted)' }}
             tabIndex={-1}
             type="button"
             title="مسح التحديد"
           >
-            <X size={14} />
-            <span className="text-[10px] font-bold hidden sm:inline">مسح</span>
+            <X size={14} className="shrink-0" />
+            <span className="text-[10px] font-bold hidden sm:inline whitespace-nowrap">مسح</span>
           </button>
         )}
 
         {/* Chevron */}
         <button
           onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }}
-          className="pl-3 pr-1 cursor-pointer"
+          className="pl-3 pr-1 cursor-pointer shrink-0"
           style={{ color: 'var(--color-text-muted)' }}
           tabIndex={-1}
           type="button"
@@ -283,11 +275,11 @@ const AutoComplete = ({
       {/* Dropdown */}
       {isOpen && (
         <div
-          className="absolute top-full mt-1 left-0 right-0 z-[100] overflow-hidden rounded-xl border shadow-xl"
+          className="absolute top-full mt-1 left-0 right-0 z-[100] overflow-hidden rounded-xl border shadow-xl min-w-full"
           style={{
             background: 'var(--color-bg-card)',
             borderColor: 'var(--color-border)',
-            maxHeight: '260px',
+            maxHeight: '340px',
             display: 'flex',
             flexDirection: 'column',
             animation: 'fadeIn 0.12s ease-out',
@@ -320,7 +312,7 @@ const AutoComplete = ({
             {/* Options */}
             {!loading && filteredOptions.map((opt, idx) => {
               const isSelected = String(getOptionValue(opt)) === String(value);
-              const isHighlighted = idx === highlightedIndex;
+              const isHighlighted = idx === safeHighlightedIndex;
               const label = getOptionLabel(opt);
 
               return (
@@ -329,7 +321,8 @@ const AutoComplete = ({
                   data-autocomplete-item
                   onClick={() => select(opt)}
                   onMouseEnter={() => setHighlightedIndex(idx)}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-right transition-all duration-75 cursor-pointer"
+                  className="w-full flex items-center gap-3 px-4 py-3 text-right transition-all duration-75 cursor-pointer hover:bg-cyan-50/50 dark:hover:bg-slate-800/60"
+                  title={label}
                   style={{
                     background: isHighlighted
                       ? 'var(--color-primary-light)'
@@ -343,7 +336,7 @@ const AutoComplete = ({
                   type="button"
                 >
                   <div
-                    className="w-2 h-2 rounded-full shrink-0 transition-all duration-75"
+                    className="w-2 h-2 rounded-full shrink-0 transition-all duration-75 mt-1"
                     style={{
                       background: isSelected
                         ? 'var(--color-primary)'
@@ -353,7 +346,7 @@ const AutoComplete = ({
                         : '2px solid var(--color-border)',
                     }}
                   />
-                  <span className="text-sm font-bold truncate">
+                  <span className="text-sm font-bold leading-snug break-words text-right flex-1">
                     {searchQuery.trim() ? highlightMatch(label, searchQuery) : label}
                   </span>
                 </button>
