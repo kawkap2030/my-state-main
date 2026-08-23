@@ -394,12 +394,12 @@ const GroupCostsPage = () => {
           <ExportMenu 
             data={displayHistory} 
             columns={[
-              { header: "المجموعة", accessor: "groupName" },
+              { header: "الشهر", accessor: "dispense_month" },
               { 
                 header: hierarchy.clinicId ? "العيادة" : hierarchy.areaId ? "المنطقة" : "الفرع", 
                 accessor: () => hierarchy.clinicId ? (hierarchyNames.clinic || "") : hierarchy.areaId ? (hierarchyNames.area || "") : (hierarchyNames.branch || "")
               },
-              { header: "الشهر", accessor: "dispense_month" },
+              { header: "اسم المجموعة", accessor: "groupName" },
               { header: "التكلفة", accessor: (r) => parseFloat(r.cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
             ]} 
             options={{ 
@@ -489,12 +489,12 @@ const GroupCostsPage = () => {
         <div className="print:hidden">
           <Table
             columns={[
-              { header: "المجموعة", accessor: "groupName" },
+              { header: "الشهر", accessor: "dispense_month" },
               {
                 header: hierarchy.clinicId ? "العيادة" : hierarchy.areaId ? "المنطقة" : "الفرع",
-                accessor: () => hierarchy.clinicId ? (hierarchyNames.clinic || "") : hierarchy.areaId ? (hierarchyNames.area || "") : (hierarchyNames.branch || ""),
+                render: () => hierarchy.clinicId ? (hierarchyNames.clinic || "") : hierarchy.areaId ? (hierarchyNames.area || "") : (hierarchyNames.branch || ""),
               },
-              { header: "الشهر", accessor: "dispense_month" },
+              { header: "اسم المجموعة", accessor: "groupName" },
               {
                 header: "التكلفة",
                 accessor: "cost",
@@ -533,12 +533,12 @@ const GroupCostsPage = () => {
           >
             <Table
               columns={[
-                { header: "المجموعة", accessor: "groupName" },
+                { header: "الشهر", accessor: "dispense_month" },
                 {
                   header: hierarchy.clinicId ? "العيادة" : hierarchy.areaId ? "المنطقة" : "الفرع",
-                  accessor: () => hierarchy.clinicId ? (hierarchyNames.clinic || "") : hierarchy.areaId ? (hierarchyNames.area || "") : (hierarchyNames.branch || ""),
+                  render: () => hierarchy.clinicId ? (hierarchyNames.clinic || "") : hierarchy.areaId ? (hierarchyNames.area || "") : (hierarchyNames.branch || ""),
                 },
-                { header: "الشهر", accessor: "dispense_month" },
+                { header: "اسم المجموعة", accessor: "groupName" },
                 {
                   header: "التكلفة",
                   accessor: "cost",

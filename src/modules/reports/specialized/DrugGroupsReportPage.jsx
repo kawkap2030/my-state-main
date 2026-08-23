@@ -76,13 +76,18 @@ const DrugGroupsReportPage = () => {
         const clinic = metaData.clinics?.find(c => c.id === r.clinic_id);
         const master = metaData.groups?.find(g => g.id === r.group_code_id);
         
+        const branchName = branch?.name || 'فرع مجمع';
+        const areaName = area?.name || 'منطقة مجمعة';
+        const clinicName = clinic?.name || 'عيادة مجمعة';
+        const locationName = r.clinic_id ? clinicName : r.area_id ? areaName : branchName;
+        
         return {
           ...r,
           groupName: r.name || master?.name || 'مجموعة غير معروفة',
-          groupCode: master?.code || '--',
-          branchName: branch?.name || 'فرع مجمع',
-          areaName: area?.name || 'منطقة مجمعة',
-          clinicName: clinic?.name || 'عيادة مجمعة'
+          branchName,
+          areaName,
+          clinicName,
+          locationName,
         };
       });
 
@@ -155,7 +160,11 @@ const DrugGroupsReportPage = () => {
   }, [data, viewType]);
 
   const columns = [
-    { header: 'كود', render: (row) => <span className="font-mono text-xs">{row.groupCode}</span> },
+    { header: 'الشهر', render: (row) => <span className="text-xs">{row.dispense_month}</span> },
+    { 
+      header: 'الموقع', 
+      render: (row) => <span className="text-xs font-bold">{row.locationName}</span>
+    },
     { 
       header: 'اسم المجموعة', 
       render: (row) => (
@@ -186,7 +195,8 @@ const DrugGroupsReportPage = () => {
   ];
 
   const exportColumns = [
-    { header: 'كود', exportAccessor: (r) => r.groupCode },
+    { header: 'الشهر', exportAccessor: (r) => r.dispense_month },
+    { header: 'الموقع', exportAccessor: (r) => r.locationName },
     { header: 'اسم المجموعة', exportAccessor: (r) => r.groupName },
     { header: 'التكلفة', exportAccessor: (r) => r.cost },
   ];
