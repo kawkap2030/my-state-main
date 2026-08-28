@@ -14,6 +14,7 @@ import { useGlobalApp } from "../../../context/useGlobalApp";
 import { useAuth } from "../../../context/AuthContext";
 import invoke from "../../../api/tauriApi";
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
+import { buildHierarchyLabel } from "../../../utils/reportUtils";
 import {
   ClipboardList,
   Hash,
@@ -25,7 +26,6 @@ import {
   CalendarRange,
   Lock,
   Unlock,
-
   RotateCcw,
   Sun,
   Moon,
@@ -52,7 +52,7 @@ import useLockGuard from "../../../hooks/useLockGuard";
 
 const MedicalTicketsPage = () => {
   const { user } = useAuth();
-  const { hierarchyNames, activeHierarchy, checkIsMonthLocked } = useGlobalApp();
+  const { hierarchyNames, activeHierarchy, workspaceMode, checkIsMonthLocked } = useGlobalApp();
   const { signatures, loadSignatures: ensureSignaturesLoaded } = useReportSignatures();
   const toast = useToast();
   const location = useLocation();
@@ -1255,8 +1255,8 @@ const MedicalTicketsPage = () => {
               (sum, r) => sum + r.ticket_56c_count,
               0,
             );
-            data[`w${w}_56b`] = w56b || "-";
-            data[`w${w}_56c`] = w56c || "-";
+            data[`w${w}_56b`] = w56b;
+            data[`w${w}_56c`] = w56c;
             data.total_56b += w56b;
             data.total_56c += w56c;
           });
@@ -1283,7 +1283,7 @@ const MedicalTicketsPage = () => {
                 acc + curr.ticket_56b_count + curr.ticket_56c_count,
               0,
             );
-            data[`w${w}_${cat}`] = sum || "-";
+            data[`w${w}_${cat}`] = sum;
             data.total += sum;
             data[`total_${cat}`] = (data[`total_${cat}`] || 0) + sum;
           });
@@ -1529,14 +1529,34 @@ const MedicalTicketsPage = () => {
     { header: "الإجمالي العام", accessor: "total" },
   ];
 
-  const exportProps = useMemo(() => {
+    const exportProps = useMemo(() => {
+    const ownedData = getProcessedData(false).allData;
+    const supportedData = getProcessedData(true).allData;
+
+    // ── DIAGNOSTIC ────────────────────────────────────────────────────
+    console.log('[MT-exportProps] owned:', ownedData.length, 'supported:', supportedData.length, 'mode:', tableViewMode);
+    if (ownedData.length > 0) console.log('[MT-exportProps] sample row:', JSON.stringify(ownedData[0]));
+
     if (tableViewMode === 'supported') {
-      return { data: getProcessedData(true).allData, columns: supportedExportColumns };
+      return { data: supportedData, columns: supportedExportColumns };
     }
-    return { data: getProcessedData(false).allData, columns: ownedExportColumns };
+    if (tableViewMode === 'owned') {
+      return { data: ownedData, columns: ownedExportColumns };
+    }
+    // tableViewMode === 'all'
+    if (ownedData.length > 0 && supportedData.length === 0) {
+      return { data: ownedData, columns: ownedExportColumns };
+    }
+    if (supportedData.length > 0 && ownedData.length === 0) {
+      return { data: supportedData, columns: supportedExportColumns };
+    }
+    if (ownedData.length > 0 && supportedData.length > 0) {
+      return { data: ownedData, columns: ownedExportColumns };
+    }
+    return { data: [], columns: ownedExportColumns };
   }, [tableViewMode, getProcessedData, ownedExportColumns, supportedExportColumns]);
 
-  const handlePremiumExport = async (type, { data: exportData, columns, options }) => {
+  const handlePremiumExport = async (type, { data: exportData, columns: _columns, options }) => {
     try {
       const enrichedOptions = { ...options };
 
@@ -1544,6 +1564,16 @@ const MedicalTicketsPage = () => {
       // tables are included regardless of the current tableViewMode.
       const ownedData = getProcessedData(false).allData;
       const supportedData = getProcessedData(true).allData;
+
+      // ── DIAGNOSTIC: log data at export time ──────────────────────────
+      if (ownedData.length > 0) {
+        console.log('[MT-Export] ownedData[0]:', JSON.stringify(ownedData[0]));
+        console.log('[MT-Export] ownedData.length:', ownedData.length);
+        console.log('[MT-Export] exportData?.length:', exportData?.length);
+        console.log('[MT-Export] tableViewMode:', tableViewMode);
+      } else {
+        console.warn('[MT-Export] ownedData is EMPTY — records.length:', records.length);
+      }
       const multiTables = [];
       if (ownedData.length > 0) {
         multiTables.push({ data: ownedData, columns: ownedExportColumns, title: 'العيادات المملوكة' });
@@ -1593,8 +1623,10 @@ const MedicalTicketsPage = () => {
         toast.success('تم تصدير Excel بنجاح');
         return true;
       }
-      if (type === 'word') { await exportToWord(exportData, columns, wordPdfOptions); toast.success('تم تصدير Word بنجاح'); return true; }
-      if (type === 'pdf') { await exportToPDF(exportData, columns, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
+            const activeData = tableViewMode === 'supported' ? supportedData : ownedData;
+      const activeCols = tableViewMode === 'supported' ? supportedExportColumns : ownedExportColumns;
+      if (type === 'word') { await exportToWord(activeData.length > 0 ? activeData : exportData, activeCols, wordPdfOptions); toast.success('تم تصدير Word بنجاح'); return true; }
+      if (type === 'pdf') { await exportToPDF(activeData.length > 0 ? activeData : exportData, activeCols, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
       return false;
     } catch (err) { console.error(err); return false; }
   };
@@ -1602,39 +1634,39 @@ const MedicalTicketsPage = () => {
   // ── Entry-form quick export (weekly / monthly forms) ───────────────────
   // Exports exactly what is typed in the current form (pre-save) with a
   // totals row — same Excel/Word/PDF/print menu used everywhere else.
-  const formExportColumns = (() => {
+    const formExportColumns = (() => {
     if (entryMode === 'monthly') {
       return isSupported
         ? [
-            { header: 'الأسبوع', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : `أسبوع ${r.week}` },
-            { header: 'هيئة', exportAccessor: (r) => r.authority || 0 },
-            { header: 'طلاب', exportAccessor: (r) => r.students || 0 },
-            { header: 'رضع', exportAccessor: (r) => r.infants || 0 },
+            { header: 'الأسبوع', accessor: 'week', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : `أسبوع ${r.week}` },
+            { header: 'هيئة', accessor: 'authority', exportAccessor: (r) => r.authority || 0 },
+            { header: 'طلاب', accessor: 'students', exportAccessor: (r) => r.students || 0 },
+            { header: 'رضع', accessor: 'infants', exportAccessor: (r) => r.infants || 0 },
           ]
         : [
-            { header: 'الأسبوع', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : `أسبوع ${r.week}` },
-            { header: '56ب', exportAccessor: (r) => r.tickets_56b || 0 },
-            { header: '56ج', exportAccessor: (r) => r.tickets_56c || 0 },
+            { header: 'الأسبوع', accessor: 'week', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : `أسبوع ${r.week}` },
+            { header: '56ب', accessor: 'tickets_56b', exportAccessor: (r) => r.tickets_56b || 0 },
+            { header: '56ج', accessor: 'tickets_56c', exportAccessor: (r) => r.tickets_56c || 0 },
           ];
     }
     // weekly form — single row for the selected week
     if (isSupported) {
       return [
-        { header: 'الفترة', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : r.label },
-        { header: 'صباحي هيئة', exportAccessor: (r) => r.morning_authority || 0 },
-        { header: 'صباحي طلاب', exportAccessor: (r) => r.morning_students || 0 },
-        { header: 'صباحي رضع', exportAccessor: (r) => r.morning_infants || 0 },
-        { header: 'مسائي هيئة', exportAccessor: (r) => r.evening_authority || 0 },
-        { header: 'مسائي طلاب', exportAccessor: (r) => r.evening_students || 0 },
-        { header: 'مسائي رضع', exportAccessor: (r) => r.evening_infants || 0 },
+        { header: 'الفترة', accessor: 'label', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : r.label },
+        { header: 'صباحي هيئة', accessor: 'morning_authority', exportAccessor: (r) => r.morning_authority || 0 },
+        { header: 'صباحي طلاب', accessor: 'morning_students', exportAccessor: (r) => r.morning_students || 0 },
+        { header: 'صباحي رضع', accessor: 'morning_infants', exportAccessor: (r) => r.morning_infants || 0 },
+        { header: 'مسائي هيئة', accessor: 'evening_authority', exportAccessor: (r) => r.evening_authority || 0 },
+        { header: 'مسائي طلاب', accessor: 'evening_students', exportAccessor: (r) => r.evening_students || 0 },
+        { header: 'مسائي رضع', accessor: 'evening_infants', exportAccessor: (r) => r.evening_infants || 0 },
       ];
     }
     return [
-      { header: 'الفترة', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : r.label },
-      { header: 'صباحي 56ب', exportAccessor: (r) => r.morning_56b || 0 },
-      { header: 'صباحي 56ج', exportAccessor: (r) => r.morning_56c || 0 },
-      { header: 'مسائي 56ب', exportAccessor: (r) => r.evening_56b || 0 },
-      { header: 'مسائي 56ج', exportAccessor: (r) => r.evening_56c || 0 },
+      { header: 'الفترة', accessor: 'label', exportAccessor: (r) => r.isTotalRow ? 'الإجمالي' : r.label },
+      { header: 'صباحي 56ب', accessor: 'morning_56b', exportAccessor: (r) => r.morning_56b || 0 },
+      { header: 'صباحي 56ج', accessor: 'morning_56c', exportAccessor: (r) => r.morning_56c || 0 },
+      { header: 'مسائي 56ب', accessor: 'evening_56b', exportAccessor: (r) => r.evening_56b || 0 },
+      { header: 'مسائي 56ج', accessor: 'evening_56c', exportAccessor: (r) => r.evening_56c || 0 },
     ];
   })();
 
@@ -1716,7 +1748,24 @@ const MedicalTicketsPage = () => {
               data={exportProps.data} 
               columns={exportProps.columns} 
               onCustomExport={handlePremiumExport} 
-              options={{ title: 'منصرف التذاكر الطبية', fileName: `medical_tickets_${hierarchy.dispenseMonth}` }} 
+              options={{
+                title: 'منصرف التذاكر الطبية',
+                fileName: `medical_tickets_${hierarchy.dispenseMonth}`,
+                month: hierarchy.dispenseMonth,
+                hierarchyLabel: buildHierarchyLabel(workspaceMode, hierarchyNames),
+                tables: (() => {
+                  const ownedData = getProcessedData(false).allData;
+                  const supportedData = getProcessedData(true).allData;
+                  const multiTables = [];
+                  if (tableViewMode === 'all' || tableViewMode === 'owned') {
+                    if (ownedData.length > 0) multiTables.push({ data: ownedData, columns: ownedExportColumns, title: 'العيادات المملوكة' });
+                  }
+                  if (tableViewMode === 'all' || tableViewMode === 'supported') {
+                    if (supportedData.length > 0) multiTables.push({ data: supportedData, columns: supportedExportColumns, title: 'العيادات المدعومة' });
+                  }
+                  return multiTables;
+                })(),
+              }} 
             />
           }
         />
@@ -1863,8 +1912,8 @@ const MedicalTicketsPage = () => {
           {entryMode === "quick_clinics" ? (
               <MedicalTicketsGridEntry branchId={hierarchy.branchId} areaId={hierarchy.areaId} dispenseMonth={hierarchy.dispenseMonth} isLocked={isLocked} />
           ) : entryMode === "weekly" ? (
-            <Card className="p-8 border-[var(--color-primary)]/20 shadow-2xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-primary)]/5 rounded-bl-full -mr-16 -mt-16 pointer-events-none" />
+            <Card className="p-8 border-[var(--color-primary)]/20 shadow-2xl relative">
+              <div className="absolute top-0 right-0 w-32 h-32 overflow-hidden pointer-events-none rounded-tr-2xl"><div className="absolute top-0 right-0 w-32 h-32 bg-[var(--color-primary)]/5 rounded-bl-full -mr-4 -mt-4" /></div>
 
               <div className="flex flex-col items-center gap-8">
                 <div className="flex items-center gap-4">
@@ -1894,7 +1943,7 @@ const MedicalTicketsPage = () => {
                       الفترة الصباحية
                     </h4>
                     {isSupported ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <Input
                           label="هيئة"
                           hint="عدد تذاكر موظفي الهيئة وعائلاتهم في العيادات المدعمة"
@@ -1969,7 +2018,7 @@ const MedicalTicketsPage = () => {
                       الفترة المسائية
                     </h4>
                     {isSupported ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <Input
                           label="هيئة"
                           type="number"
@@ -2211,7 +2260,7 @@ const MedicalTicketsPage = () => {
               </div>
             </Card>
           ) : (
-            <Card className="p-8 border-amber-500/20 shadow-2xl relative overflow-hidden">
+            <Card className="p-8 border-amber-500/20 shadow-2xl relative">
                 <div className="flex flex-col gap-8 w-full">
                   {/* الصف العلوي: التقويم + التاريخ + العنوان */}
                   <div className="flex flex-row items-stretch gap-6 w-full">
@@ -2732,11 +2781,24 @@ const MedicalTicketsPage = () => {
                 <tr className="border border-slate-300">
                   <th className="p-2 border border-slate-300">العيادة</th>
                   <th className="p-2 border border-slate-300">الصنف</th>
-                  <th className="p-2 border border-slate-300" colSpan={2}>الأول</th>
-                  <th className="p-2 border border-slate-300" colSpan={2}>الثاني</th>
-                  <th className="p-2 border border-slate-300" colSpan={2}>الثالث</th>
-                  <th className="p-2 border border-slate-300" colSpan={2}>الرابع</th>
-                  <th className="p-2 border border-slate-300" colSpan={2}>الإجمالي</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={2}>الأول</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={2}>الثاني</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={2}>الثالث</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={2}>الرابع</th>
+                  <th className="p-2 border border-slate-300 text-center" colSpan={2}>الإجمالي</th>
+                </tr>
+                <tr className="border border-slate-300 bg-slate-50 text-[9px]">
+                  <th className="p-1 border border-slate-300" colSpan={2}></th>
+                  <th className="p-1 border border-slate-300 text-center">56ب</th>
+                  <th className="p-1 border border-slate-300 text-center">56ج</th>
+                  <th className="p-1 border border-slate-300 text-center">56ب</th>
+                  <th className="p-1 border border-slate-300 text-center">56ج</th>
+                  <th className="p-1 border border-slate-300 text-center">56ب</th>
+                  <th className="p-1 border border-slate-300 text-center">56ج</th>
+                  <th className="p-1 border border-slate-300 text-center">56ب</th>
+                  <th className="p-1 border border-slate-300 text-center">56ج</th>
+                  <th className="p-1 border border-slate-300 text-center bg-slate-200">56ب</th>
+                  <th className="p-1 border border-slate-300 text-center bg-slate-200">56ج</th>
                 </tr>
               </thead>
               <tbody>
@@ -2757,6 +2819,30 @@ const MedicalTicketsPage = () => {
                   </tr>
                 ))}
               </tbody>
+              <tfoot className="bg-slate-100 font-bold">
+                <tr className="border border-slate-300">
+                  <td colSpan={2} className="p-2 border border-slate-300 text-right">
+                    الإجمالي العام ({getProcessedData(false).allData.length} سجل):
+                  </td>
+                  {[1, 2, 3, 4].map((w) => {
+                    const allData = getProcessedData(false).allData;
+                    const sum56b = allData.reduce((s, r) => s + (parseInt(r[`w${w}_56b`]) || 0), 0);
+                    const sum56c = allData.reduce((s, r) => s + (parseInt(r[`w${w}_56c`]) || 0), 0);
+                    return (
+                      <React.Fragment key={w}>
+                        <td className="p-1 border border-slate-300 text-center">{sum56b}</td>
+                        <td className="p-1 border border-slate-300 text-center">{sum56c}</td>
+                      </React.Fragment>
+                    );
+                  })}
+                  <td className="p-1 border border-slate-300 text-center bg-slate-200 font-black">
+                    {getProcessedData(false).allData.reduce((s, r) => s + (parseInt(r.total_56b) || 0), 0)}
+                  </td>
+                  <td className="p-1 border border-slate-300 text-center bg-slate-200 font-black">
+                    {getProcessedData(false).allData.reduce((s, r) => s + (parseInt(r.total_56c) || 0), 0)}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
           )}
@@ -2997,6 +3083,36 @@ const MedicalTicketsPage = () => {
                   </tr>
                 ))}
               </tbody>
+              <tfoot className="bg-slate-100 font-bold">
+                <tr className="border border-slate-300">
+                  <td className="p-2 border border-slate-300 text-right">
+                    الإجمالي العام ({getProcessedData(true).allData.length} سجل):
+                  </td>
+                  {[1, 2, 3, 4].map((w) => {
+                    const allData = getProcessedData(true).allData;
+                    return supportedCategories.map((cat) => {
+                      const sum = allData.reduce((s, r) => s + (parseInt(r[`w${w}_${cat}`]) || 0), 0);
+                      return (
+                        <td key={`${w}_${cat}`} className="p-1 border border-slate-300 text-center">
+                          {sum}
+                        </td>
+                      );
+                    });
+                  })}
+                  <td className="p-1 border border-slate-300 text-center font-bold bg-slate-100">
+                    {getProcessedData(true).allData.reduce((s, r) => s + (parseInt(r.total_هيئة) || 0), 0)}
+                  </td>
+                  <td className="p-1 border border-slate-300 text-center font-bold bg-slate-100">
+                    {getProcessedData(true).allData.reduce((s, r) => s + (parseInt(r.total_طلاب) || 0), 0)}
+                  </td>
+                  <td className="p-1 border border-slate-300 text-center font-bold bg-slate-100">
+                    {getProcessedData(true).allData.reduce((s, r) => s + (parseInt(r.total_رضع) || 0), 0)}
+                  </td>
+                  <td className="p-1 border border-slate-300 text-center font-black bg-slate-200">
+                    {getProcessedData(true).allData.reduce((s, r) => s + (parseInt(r.total) || 0), 0)}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
           )}

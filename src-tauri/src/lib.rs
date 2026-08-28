@@ -201,6 +201,7 @@ pub fn run() {
             commands::insulin_dispensed::get_insulin_previous_prices,
             commands::insulin_dispensed::delete_insulin_dispensed,
             commands::insulin_dispensed::get_insulin_dispensed_range,
+            commands::insulin_dispensed::check_insulin_entry_allowed,
             commands::drug_groups::save_drug_group,
             commands::drug_groups::save_drug_group_cost,
             commands::drug_groups::get_drug_groups_report,

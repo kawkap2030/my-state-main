@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "منظومة إحصائيات الأدوية والمستلزمات الطبية",
+  "productName": "DrugStats",
   "version": "0.1.0",
   "identifier": "com.mystats.drugapp",
   "mainBinaryName": "drug-stats",
@@ -18,7 +18,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi"],
     "icon": [
       "icons/kawkab_32x32.png",
       "icons/kawkab_128x128.png",

@@ -353,7 +353,7 @@ const Sidebar = ({ collapsed, onToggle }) => {
                       to={item.to}
                       onMouseEnter={() => preloadRoute(item.to)}
                       className={linkClass}
-                      title={collapsed ? item.label : undefined}
+                      title={item.label}
                     >
                       {({ isActive }) => (
                         <>

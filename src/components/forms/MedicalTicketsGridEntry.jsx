@@ -236,7 +236,7 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth, isLocked }) 
 
   return (
     <div className="space-y-4 animate-slideUp">
-      <div className="flex flex-wrap justify-between items-center gap-3 bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 shadow-sm" dir="rtl">
+      <div className="flex flex-wrap justify-between items-center gap-3 bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 shadow-sm no-print" dir="rtl">
         <div className="flex items-center gap-2 text-sm font-bold text-indigo-700">
           <AlertCircle size={18} />
           <span>الجدول الشبكي السريع: أدخل التذاكر (عام) لجميع عيادات المنطقة للأسبوع 1 من الشهر الحالي واضغط حفظ لحفظها دفعة واحدة.</span>
@@ -249,11 +249,11 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth, isLocked }) 
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-[var(--color-border)] shadow-inner">
+      <div className="overflow-x-auto rounded-xl border border-[var(--color-border)] shadow-inner no-print">
         <table className="w-full text-right text-xs" dir="rtl">
           <thead className="bg-[var(--color-bg-card)] text-[var(--color-text-muted)] sticky top-0 z-10 font-black">
             <tr>
-              <th className="p-3 border-b border-[var(--color-border)] min-w-[200px]">العيادة</th>
+              <th className="p-3 border-b border-[var(--color-border)] min-w-[200px] max-w-[300px]">العيادة</th>
               <th className="p-3 border-b border-[var(--color-border)] bg-amber-50/50 text-amber-700 text-center" colSpan="2">
                 <div className="flex items-center justify-center gap-2"><Sun size={14}/> الفترة الصباحية</div>
               </th>
@@ -263,29 +263,29 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth, isLocked }) 
             </tr>
             <tr>
               <th className="p-2 border-b border-[var(--color-border)]"></th>
-              <th className="p-2 border-b border-[var(--color-border)] text-center text-[10px]">56ب (مجاني)</th>
-              <th className="p-2 border-b border-[var(--color-border)] text-center text-[10px]">56ج (مؤمن عليه)</th>
-              <th className="p-2 border-b border-[var(--color-border)] text-center text-[10px]">56ب (مجاني)</th>
-              <th className="p-2 border-b border-[var(--color-border)] text-center text-[10px]">56ج (مؤمن عليه)</th>
+              <th className="p-2 border-b border-[var(--color-border)] text-center text-[10px] min-w-[100px]">56ب (مجاني)</th>
+              <th className="p-2 border-b border-[var(--color-border)] text-center text-[10px] min-w-[100px]">56ج (مؤمن عليه)</th>
+              <th className="p-2 border-b border-[var(--color-border)] text-center text-[10px] min-w-[100px]">56ب (مجاني)</th>
+              <th className="p-2 border-b border-[var(--color-border)] text-center text-[10px] min-w-[100px]">56ج (مؤمن عليه)</th>
             </tr>
           </thead>
           <tbody className="bg-[var(--color-bg)]">
             {data.map((row, idx) => (
               <tr key={row.id} className="hover:bg-[var(--color-bg-card)] transition-colors border-b border-[var(--color-border)]">
-                <td className="p-3 font-bold flex items-center gap-2 text-sm">
+                <td className="p-3 font-bold flex items-center gap-2 text-sm min-w-[200px] max-w-[300px]">
                   <Hospital size={16} className="text-[var(--color-primary)]" />
-                  {row.name}
+                  <span className="truncate" title={row.name}>{row.name}</span>
                 </td>
-                <td className="p-1">
+                <td className="p-1 min-w-[100px]">
                   <input type="number" placeholder="0" value={row.morning_56b} onChange={e => handleInputChange(idx, 'morning_56b', e.target.value)} disabled={isLocked} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black disabled:opacity-50 disabled:cursor-not-allowed" />
                 </td>
-                <td className="p-1">
+                <td className="p-1 min-w-[100px]">
                   <input type="number" placeholder="0" value={row.morning_56c} onChange={e => handleInputChange(idx, 'morning_56c', e.target.value)} disabled={isLocked} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black disabled:opacity-50 disabled:cursor-not-allowed" />
                 </td>
-                <td className="p-1">
+                <td className="p-1 min-w-[100px]">
                   <input type="number" placeholder="0" value={row.evening_56b} onChange={e => handleInputChange(idx, 'evening_56b', e.target.value)} disabled={isLocked} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black disabled:opacity-50 disabled:cursor-not-allowed" />
                 </td>
-                <td className="p-1">
+                <td className="p-1 min-w-[100px]">
                   <input type="number" placeholder="0" value={row.evening_56c} onChange={e => handleInputChange(idx, 'evening_56c', e.target.value)} disabled={isLocked} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white text-center font-black disabled:opacity-50 disabled:cursor-not-allowed" />
                 </td>
               </tr>
@@ -293,6 +293,49 @@ const MedicalTicketsGridEntry = ({ branchId, areaId, dispenseMonth, isLocked }) 
           </tbody>
         </table>
       </div>
+
+      {/* Print-only static table — shown only in print */}
+      {data.length > 0 && (
+        <div className="hidden print:block">
+          <h3 className="text-center font-bold mb-2 text-sm">التذاكر الطبية (عام) — الأسبوع 1 — منطقة {areaId}</h3>
+          <table className="w-full text-right text-[10px] border-collapse border border-slate-300" dir="rtl">
+            <thead className="bg-slate-100">
+              <tr className="border border-slate-300">
+                <th className="p-2 border border-slate-300">العيادة</th>
+                <th className="p-2 border border-slate-300 text-center" colSpan="2">الفترة الصباحية</th>
+                <th className="p-2 border border-slate-300 text-center" colSpan="2">الفترة المسائية</th>
+              </tr>
+              <tr className="border border-slate-300 bg-slate-50 text-[9px]">
+                <th className="p-1 border border-slate-300"></th>
+                <th className="p-1 border border-slate-300 text-center">56ب (مجاني)</th>
+                <th className="p-1 border border-slate-300 text-center">56ج (مؤمن عليه)</th>
+                <th className="p-1 border border-slate-300 text-center">56ب (مجاني)</th>
+                <th className="p-1 border border-slate-300 text-center">56ج (مؤمن عليه)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((row) => (
+                <tr key={row.id} className="border border-slate-300">
+                  <td className="p-1 border border-slate-300 font-bold">{row.name}</td>
+                  <td className="p-1 border border-slate-300 text-center">{row.morning_56b || '-'}</td>
+                  <td className="p-1 border border-slate-300 text-center">{row.morning_56c || '-'}</td>
+                  <td className="p-1 border border-slate-300 text-center">{row.evening_56b || '-'}</td>
+                  <td className="p-1 border border-slate-300 text-center">{row.evening_56c || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-slate-100 font-bold">
+              <tr className="border border-slate-300">
+                <td className="p-2 border border-slate-300 text-right">الإجمالي ({data.length} عيادة):</td>
+                <td className="p-1 border border-slate-300 text-center">{data.reduce((s, r) => s + (parseInt(r.morning_56b) || 0), 0)}</td>
+                <td className="p-1 border border-slate-300 text-center">{data.reduce((s, r) => s + (parseInt(r.morning_56c) || 0), 0)}</td>
+                <td className="p-1 border border-slate-300 text-center">{data.reduce((s, r) => s + (parseInt(r.evening_56b) || 0), 0)}</td>
+                <td className="p-1 border border-slate-300 text-center">{data.reduce((s, r) => s + (parseInt(r.evening_56c) || 0), 0)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
 
       {/* Duplicate-period overwrite confirmation */}
       <ConfirmModal

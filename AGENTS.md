@@ -61,15 +61,96 @@ pm run test:all — Run all tests (unit + E2E)
 pm run lint for static analysis)
 - Coverage requires @vitest/coverage-v8 (not yet installed)
 
-## Rust Toolchain (IMPORTANT)
-- The project pins **nightly** via `src-tauri/rust-toolchain.toml`. Do NOT remove it.
-- **Why:** stable rustc 1.97.1 crashes with `STATUS_ACCESS_VIOLATION` (0xc0000005) during codegen while compiling `zerocopy`'s SIMD code on Windows x86_64-msvc. Nightly 1.99.0 compiles it fine (verified: full `cargo build` succeeds).
-- If the toolchain is ever unpinned and you hit `0xc0000005` / `STATUS_ACCESS_VIOLATION` while compiling `zerocopy`/`zerofrom-derive`, re-add the pin (`channel = "nightly"`) or build with `cargo +nightly build`.
-- Diagnosed Aug 2026: crash target moves between crates (app_lib → zerocopy → zerofrom_derive), survives `cargo clean`, `strip=none`, `debug=2`, `codegen-units=1`, `-j 2`, toolchain reinstall and Defender exclusions — it is a stable-toolchain codegen bug, not app code.
+## Current Build/Toolchain Status
 
-## Rust Toolchain Requirement (important!)
-- **rustc 1.97.1+ is REQUIRED** on Windows/MSVC. Older compilers (e.g. 1.95.0) crash with an internal compiler error (ICE) during full builds:
-  `thread 'rustc' panicked ... assertion failed: bytes[len] == STR_SENTINEL` in `rustc_serialize` (exit code `0xc0000409` / `STATUS_STACK_BUFFER_OVERRUN`).
-- The ICE happens only on full `cargo build` / `tauri dev` with debuginfo — `cargo check` may still pass, which makes it misleading.
-- Fix if it recurs: `rustup update stable` (or `rustup toolchain install 1.97.1`), then re-add the Windows target and std component:
-  `rustup target add x86_64-pc-windows-msvc` and `rustup component add rust-std --target x86_64-pc-windows-msvc`.
+### Recommended Toolchain
+- **Approved toolchain (current):** Stable Rust **1.97.1** on `x86_64-pc-windows-msvc`.
+- Forced on the project by `src-tauri/rust-toolchain.toml` (`channel = "1.97.1"`, `profile = "minimal"`).
+- `cargo +stable check --no-default-features --offline` → **EXIT 0** (verified).
+- `cargo build` → success (verified).
+- `cargo build --release` → success (verified).
+- Tauri release build produced the working executable:
+  `src-tauri\target\release\drug-stats.exe` (built and run).
+
+### Rust environment
+- rustc 1.97.1
+- cargo 1.97.1
+- target: x86_64-pc-windows-msvc
+
+### Historical note — Nightly (resolved, keep as record)
+- During development the project pinned `nightly-2026-08-08` because older toolchains
+  hit compiler ICE / `STATUS_HEAP_CORRUPTION` / `STATUS_ACCESS_VIOLATION` /
+  `STATUS_STACK_BUFFER_OVERRUN` while compiling `zerocopy` / `webview2-com-sys` on
+  Windows MSVC. These issues are resolved on stable 1.97.1.
+- Nightly is **no longer required** and is **not** preferred.
+- Do **not** delete the historical Nightly config backup at `src-tauri/rust-toolchain.toml.backup`.
+- If stable build issues ever recur (e.g. `bytes[len] == STR_SENTINEL` ICE), ensure
+  the stable toolchain + Windows target/std are installed:
+  `rustup update stable`, `rustup target add x86_64-pc-windows-msvc`,
+  `rustup component add rust-std --target x86_64-pc-windows-msvc`.
+
+## Current Build/Toolchain Status (Vite)
+- The `pluginName is not defined` / `[plugin externalize-deps]` error seen during
+  development was a transient Vite/esbuild environment issue and is **resolved**.
+- Last confirmed state: `VITE v7.3.1 ready`, `Local: http://localhost:5174/`.
+- No change to `vite.config.js` is currently required for this issue. Do not modify Vite config.
+
+## Functional Testing Status — Phase 1
+- Admin pages: tested.
+- Basic dispensing (صرف) pages: tested.
+- Development build: working.
+- Release `.exe` (`drug-stats.exe`): working — launched and tested.
+- Printing & export: **not yet fully tested** (review pending).
+- Reports review: **not yet complete**.
+- Functional testing is **NOT complete**.
+
+## Insulin Fixes — Phase Summary (stage record only)
+The insulin dispensing issue comprised:
+1. A second record was not saved when it was the same drug + same category at a **different price**.
+2. Root cause: backend validation did not consider `unit_price` when checking category repetition.
+3. Backend changed to allow the same drug/category at a **different price**.
+4. Real duplicates (all record identity fields identical, including price) remain rejected.
+5. Category filtering fixed per type: **مدعم (تجاري)** vs **مجاني**.
+6. **الكل** mode fixed so it no longer forces choosing a single category.
+7. Silent data loss on partial save prevented — failed records are now shown to the user.
+
+## Open Functional Issues / Next Test Phases
+### 1. Quick entry for branches (الإدخال السريع للفروع)
+- Quick entry works and records appear inside the input fields themselves.
+- However, they do not appear as separate records below the input area as expected.
+- There is a logic-linking issue between quick entry and the pages:
+  - Monthly supported drug dispensing (المنصرف الشهري للأدوية المدعمة)
+  - Monthly free drug dispensing (المنصرف الشهري للأدوية المجانية)
+- This can produce a conflicting branch-wide aggregate entry plus clinic entries for the same month.
+- Requires an independent functional review.
+
+### 2. Drug groups (المجموعات الدوائية)
+- Individual entry works correctly and prevents duplicates.
+- Batch/group entry allows duplicates / replacement.
+- Requires an independent review.
+
+### 3. Printing & export
+- Final review not started yet.
+
+### 4. Reports
+- Final review not started yet.
+
+### 5. Project cleanup
+- Phase of removing unnecessary files not started yet.
+
+## Status (do not treat as final)
+- The project is currently in state: **Stable / Working Development & Release Build — Functional Review Ongoing**.
+- It is **not** "Final / Production Complete".
+- Remaining work includes: print/export review for reviewed input pages, reports review,
+  report print/export review, identifying unnecessary files, identifying duplicate/redundant files,
+  careful cleanup, and a final comprehensive post-cleanup test.
+
+## Changelog (stage record)
+Phase 1 stabilization:
+- Migrated project toolchain documentation from Nightly to Stable 1.97.1.
+- Verified Rust check/build/release build.
+- Verified Tauri release executable generation.
+- Vite/esbuild startup issue resolved.
+- Insulin save/filter/all-mode issues fixed.
+- Functional testing remains in progress.
+

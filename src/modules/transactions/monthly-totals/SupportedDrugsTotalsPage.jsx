@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { useLocation, Link } from "react-router-dom";
 import HierarchySelector from "../../../components/common/HierarchySelector";
+import LockNotificationBanner from "../../../components/common/LockNotificationBanner";
 import {
   DollarSign,
   Home,
@@ -25,6 +26,7 @@ import { useGlobalApp } from "../../../context/useGlobalApp";
 import { buildHierarchyLabel } from "../../../utils/reportUtils";
 
 import PrintableTable from '../../../components/common/PrintableTable';
+import useLockGuard from '../../../hooks/useLockGuard';
 
 const SupportedDrugsTotalsPage = () => {
   const location = useLocation();
@@ -47,6 +49,7 @@ const SupportedDrugsTotalsPage = () => {
     dispenseMonth:
       location.state?.dispenseMonth || activeHierarchy.dispenseMonth || new Date().toISOString().substring(0, 7),
   });
+  const { isLocked: monthLocked, LockBanner } = useLockGuard(hierarchy?.dispenseMonth);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const handleEditRecord = (record) => {
@@ -190,6 +193,10 @@ const SupportedDrugsTotalsPage = () => {
   })();
 
   const handleSave = async () => {
+    if (monthLocked) {
+      toast.warning("الشهر مقفل — لا يمكن حفظ البيانات");
+      return;
+    }
     if (!hierarchy?.branchId) {
       toast.warning("يرجى اختيار الفرع أولاً");
       return;
@@ -366,6 +373,8 @@ const SupportedDrugsTotalsPage = () => {
               compact={true}
             />
 
+            <LockBanner />
+
             {/* Divider */}
             <div className="w-full h-[1px] bg-[var(--color-border)]"></div>
 
@@ -427,7 +436,8 @@ const SupportedDrugsTotalsPage = () => {
                               onChange={(e) =>
                                 handleChange(valueName, e.target.value)
                               }
-                              className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-3 rounded-xl text-base font-bold text-center text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-success)]/20 focus:border-[var(--color-success)] transition-all"
+                              disabled={monthLocked}
+                              className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-3 rounded-xl text-base font-bold text-center text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-success)]/20 focus:border-[var(--color-success)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                             />
                           </div>
 
@@ -444,7 +454,8 @@ const SupportedDrugsTotalsPage = () => {
                               onChange={(e) =>
                                 handleChange(shareName, e.target.value)
                               }
-                              className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-3 rounded-xl text-base font-bold text-center text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-warning)]/20 focus:border-[var(--color-warning)] transition-all"
+                              disabled={monthLocked}
+                              className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-3 rounded-xl text-base font-bold text-center text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-warning)]/20 focus:border-[var(--color-warning)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                             />
                           </div>
 
@@ -474,7 +485,8 @@ const SupportedDrugsTotalsPage = () => {
                   </label>
                   <textarea
                     rows="3"
-                    className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-4 rounded-xl text-sm font-medium text-right text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-success)]/20 transition-all resize-y"
+                    disabled={monthLocked}
+                    className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] outline-none p-4 rounded-xl text-sm font-medium text-right text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-success)]/20 transition-all resize-y disabled:opacity-50 disabled:cursor-not-allowed"
                     placeholder="أدخل أي ملاحظات إضافية هنا..."
                     value={formData.notes}
                     onChange={(e) => handleChange("notes", e.target.value)}
@@ -491,19 +503,21 @@ const SupportedDrugsTotalsPage = () => {
 
                 <button
                   onClick={handleSave}
-                  disabled={saving || !hierarchy?.branchId}
+                  disabled={saving || !hierarchy?.branchId || monthLocked}
                   className={`w-full flex items-center justify-center gap-3 py-4 rounded-2xl font-black text-base transition-all duration-300 shadow-lg ${
-                    saving || !hierarchy?.branchId
+                    saving || !hierarchy?.branchId || monthLocked
                       ? "bg-[var(--color-bg)] text-[var(--color-text-muted)] cursor-not-allowed border border-[var(--color-border)]"
                       : "bg-gradient-to-r from-[var(--color-success)] to-emerald-500 text-white hover:shadow-xl hover:-translate-y-1 hover:shadow-emerald-500/50 shadow-emerald-500/30 active:translate-y-0 active:scale-[0.98]"
                   }`}
                 >
                   {saving ? (
                     <Loader2 size={22} className="animate-spin" />
+                  ) : monthLocked ? (
+                    <Lock size={22} />
                   ) : (
                     <Save size={22} />
                   )}
-                  <span>{saving ? "جاري الحفظ..." : "✓ حفظ سجل الصرف"}</span>
+                  <span>{monthLocked ? "الشهر مقفل" : saving ? "جاري الحفظ..." : "✓ حفظ سجل الصرف"}</span>
                 </button>
               </div>
             )}

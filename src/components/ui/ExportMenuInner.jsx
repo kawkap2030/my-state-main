@@ -429,8 +429,55 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
           exportData={data}
           exportColumns={columns}
         >
-          {/* Preview content — the actual data rendered as a table */}
-          {data.length > 0 && (
+          {/* Preview content — the actual data rendered as a table or multi-tables */}
+          {finalOptions.tables && finalOptions.tables.length > 0 ? (
+            <div style={{ fontSize: 'inherit' }} className="space-y-6">
+              {finalOptions.tables.map((tbl, tblIdx) => (
+                <div key={tblIdx} className="space-y-2">
+                  {tbl.title && (
+                    <h4 style={{ fontWeight: 800, fontSize: '1.1em', color: '#0891b2', margin: '12px 0 6px 0' }}>
+                      {tbl.title}
+                    </h4>
+                  )}
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'inherit' }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc', borderBottom: '2px solid #000' }}>
+                        {tbl.columns.map((col, idx) => (
+                          <th key={idx} style={{ padding: '8px 6px', border: '1px solid #ccc', textAlign: 'center', fontWeight: 700, fontSize: 'inherit' }}>
+                            {col.header || col}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tbl.data.slice(0, 50).map((row, rowIdx) => (
+                        <tr key={rowIdx} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                          {tbl.columns.map((col, colIdx) => (
+                            <td key={colIdx} style={{ padding: '6px 4px', border: '1px solid #e2e8f0', textAlign: 'center', fontSize: 'inherit' }}>
+                              {col.render
+                                ? col.render(row)
+                                : col.exportAccessor
+                                  ? (typeof col.exportAccessor === 'function' ? col.exportAccessor(row) : row[col.exportAccessor])
+                                  : col.accessor
+                                    ? (typeof col.accessor === 'function' ? col.accessor(row) : row[col.accessor])
+                                    : '-'}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                      {tbl.data.length > 50 && (
+                        <tr>
+                          <td colSpan={tbl.columns.length} style={{ padding: '12px', textAlign: 'center', color: '#94a3b8', fontSize: '10px', fontWeight: 700 }}>
+                            ... وعرض {tbl.data.length - 50} صفاً إضافياً عند الطباعة
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          ) : data.length > 0 ? (
             <div style={{ fontSize: 'inherit' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'inherit' }}>
                 <thead>
@@ -468,7 +515,7 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
                 </tbody>
               </table>
             </div>
-          )}
+          ) : null}
         </PrintPreviewModal>
       </div>
     </div>

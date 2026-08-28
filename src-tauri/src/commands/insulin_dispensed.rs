@@ -114,32 +114,122 @@ pub fn save_insulin_dispensed(
     // Prevent exactly same record (same insulin, location, month, price,
     // category, type) — enforced on BOTH insert and update, excluding self.
     let exclude_id = data.id.unwrap_or(-1);
+    let trimmed_name = data.name.trim().to_string();
+    let trimmed_category = data.category.trim().to_string();
+
     let exists_duplicate: bool = conn.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM insulin_dispensed 
-            WHERE name = ?1 AND dispense_month = ?2 AND branch_id = ?3 
+            WHERE (TRIM(name) = ?1 OR (insulin_code_id IS NOT NULL AND ?10 IS NOT NULL AND insulin_code_id = ?10))
+            AND dispense_month = ?2 AND branch_id = ?3 
             AND (area_id IS ?4)
             AND (clinic_id IS ?5)
             AND ABS(price - ?6) < 0.001
-            AND category = ?7 AND type = ?8
+            AND TRIM(category) = ?7 AND type = ?8
             AND id != ?9
          )",
         rusqlite::params![
-            data.name, 
+            trimmed_name, 
             data.dispense_month, 
             data.branch_id, 
             data.area_id, 
             data.clinic_id,
             data.price,
-            data.category,
+            trimmed_category,
             data.type_,
-            exclude_id
+            exclude_id,
+            data.insulin_code_id
         ],
         |row| row.get(0)
     ).unwrap_or(false);
 
     if exists_duplicate {
         return Err("يوجد ادخال سابق للصنف بنفس السعر يمكنك مراجعة الصنف والتعديل عليه".to_string());
+    }
+
+    // --- 4. Mutual Exclusion: "الكل" (All) vs Individual Categories (Scope-Level) ---
+    // Within a single type (مجاني OR مدعم) and a single hierarchy scope (branch/area/clinic)
+    // and a single month, "الكل" and the individual categories are mutually exclusive.
+    // Also, an individual category cannot be repeated for the same scope, and "الكل"
+    // cannot be repeated for the same scope.
+    const ALL_CATEGORY_NAME: &str = "الكل";
+    let is_new_all = trimmed_category == ALL_CATEGORY_NAME;
+
+    let type_label = {
+        let t = data.type_.trim();
+        if t.contains("مجان") || t.contains("مجاني") {
+            "المجانية"
+        } else if t.contains("مدعم") || t.contains("تجاري") {
+            "المدعمة"
+        } else {
+            "المدخلة"
+        }
+    };
+
+    // Records already stored for the same type + scope + month (any drug / any price).
+    let scope_categories: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT TRIM(category)
+             FROM insulin_dispensed
+             WHERE type = ?1
+               AND dispense_month = ?2 AND branch_id = ?3
+               AND (area_id IS ?4)
+               AND (clinic_id IS ?5)
+               AND id != ?6"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(
+            rusqlite::params![
+                data.type_,
+                data.dispense_month,
+                data.branch_id,
+                data.area_id,
+                data.clinic_id,
+                exclude_id
+            ],
+            |row| row.get::<_, String>(0)
+        ).map_err(|e| e.to_string())?;
+        let mut cats = Vec::new();
+        for r in rows {
+            cats.push(r.map_err(|e| e.to_string())?);
+        }
+        cats
+    };
+
+    if is_new_all {
+        // Saving "الكل": no individual category may exist for the same scope.
+        let has_individual = scope_categories.iter().any(|c| c != ALL_CATEGORY_NAME);
+        if has_individual {
+            return Err(
+                format!(
+                    "لا يمكن الإدخال الجماعي. توجد بيانات {} مدخلة مسبقًا لفئات مفردة لهذه الجهة خلال هذا الشهر.",
+                    type_label
+                )
+            );
+        }
+        // Also "الكل" itself cannot be repeated.
+        if scope_categories.iter().any(|c| c == ALL_CATEGORY_NAME) {
+            return Err(
+                format!(
+                    "لا يمكن الإدخال. تم إدخال البيانات {} لجميع الفئات مسبقًا لهذه الجهة خلال هذا الشهر.",
+                    type_label
+                )
+            );
+        }
+    } else {
+        // Saving an individual category.
+        // 1) "الكل" exists for same scope -> reject (mutual exclusion of "الكل" vs individual).
+        if scope_categories.iter().any(|c| c == ALL_CATEGORY_NAME) {
+            return Err(
+                format!(
+                    "لا يمكن الإدخال. تم إدخال البيانات {} لجميع الفئات مسبقًا لهذه الجهة خلال هذا الشهر.",
+                    type_label
+                )
+            );
+        }
+        // NOTE: A repeated individual category is intentionally ALLOWED here because the
+        // exact-duplicate (price-aware) check in step 3 already rejects same drug + type +
+        // category + scope + month + price. unit_price is part of record identity, so the
+        // same category at a DIFFERENT price is a valid, separate record.
     }
 
     if let Some(id) = data.id {
@@ -409,4 +499,117 @@ pub fn get_insulin_dispensed_range(
         result.push(row.map_err(|e| e.to_string())?);
     }
     Ok(result)
+}
+
+#[derive(Serialize)]
+pub struct InsulinEntryCheckResult {
+    pub allowed: bool,
+    pub message: Option<String>,
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub fn check_insulin_entry_allowed(
+    state: State<'_, AppState>,
+    type_: String,
+    branchId: i32,
+    areaId: Option<i32>,
+    clinicId: Option<i32>,
+    dispenseMonth: String,
+    allMode: bool,
+    category: Option<String>,
+) -> Result<InsulinEntryCheckResult, String> {
+    let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+
+    const ALL_CATEGORY_NAME: &str = "الكل";
+
+    // Friendly label for the current type to build dynamic messages.
+    let type_label = {
+        let t = type_.trim();
+        if t.contains("مجان") || t.contains("مجاني") {
+            "المجانية"
+        } else if t.contains("مدعم") || t.contains("تجاري") {
+            "المدعمة"
+        } else {
+            "المدخلة"
+        }
+    };
+
+    // Categories already stored for the same type + scope + month.
+    let scope_categories: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT TRIM(category)
+             FROM insulin_dispensed
+             WHERE type = ?1
+               AND dispense_month = ?2 AND branch_id = ?3
+               AND (area_id IS ?4)
+               AND (clinic_id IS ?5)"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(
+            rusqlite::params![type_, dispenseMonth, branchId, areaId, clinicId],
+            |row| row.get::<_, String>(0)
+        ).map_err(|e| e.to_string())?;
+        let mut cats = Vec::new();
+        for r in rows {
+            cats.push(r.map_err(|e| e.to_string())?);
+        }
+        cats
+    };
+
+    let has_all = scope_categories.iter().any(|c| c == ALL_CATEGORY_NAME);
+    let has_individual = scope_categories.iter().any(|c| c != ALL_CATEGORY_NAME);
+
+    if allMode {
+        // Attempting "الكل".
+        if has_individual {
+            return Ok(InsulinEntryCheckResult {
+                allowed: false,
+                message: Some(
+                    format!(
+                        "لا يمكن الإدخال الجماعي.\nتوجد بيانات {} مدخلة مسبقًا لفئات مفردة لهذه الجهة خلال هذا الشهر.",
+                        type_label
+                    ),
+                ),
+            });
+        }
+        if has_all {
+            return Ok(InsulinEntryCheckResult {
+                allowed: false,
+                message: Some(
+                    format!(
+                        "لا يمكن الإدخال.\nتم إدخال البيانات {} لجميع الفئات مسبقًا لهذه الجهة خلال هذا الشهر.",
+                        type_label
+                    ),
+                ),
+            });
+        }
+        return Ok(InsulinEntryCheckResult { allowed: true, message: None });
+    }
+
+    // Attempting a specific individual category.
+    let target = category.unwrap_or_default().trim().to_string();
+    if has_all {
+        return Ok(InsulinEntryCheckResult {
+            allowed: false,
+            message: Some(
+                format!(
+                    "لا يمكن الإدخال.\nتم إدخال البيانات {} لجميع الفئات مسبقًا لهذه الجهة خلال هذا الشهر.",
+                    type_label
+                ),
+            ),
+        });
+    }
+    if !target.is_empty() && scope_categories.iter().any(|c| c == &target) {
+        return Ok(InsulinEntryCheckResult {
+            allowed: false,
+            message: Some(
+                format!(
+                    "لا يمكن الإدخال.\nتم إدخال هذه الفئة {} مسبقًا لهذه الجهة خلال هذا الشهر.",
+                    type_label
+                ),
+            ),
+        });
+    }
+    Ok(InsulinEntryCheckResult { allowed: true, message: None })
 }

@@ -29,6 +29,18 @@ import { executePrint } from '../../../utils/exportPrint';
 import useKeyboardShortcuts from '../../../hooks/useKeyboardShortcuts';
 import useLockGuard from '../../../hooks/useLockGuard';
 
+const isFreeType = (t) => {
+  if (!t) return false;
+  const s = String(t).trim();
+  return s === 'مجاني' || s.includes('مجاني') || s.includes('مجان');
+};
+
+const isSubsidizedType = (t) => {
+  if (!t) return false;
+  const s = String(t).trim();
+  return s === 'مدعم' || s.includes('مدعم') || s.includes('تجاري') || (!isFreeType(t) && s.length > 0);
+};
+
 const InsulinDispensingPage = () => {
   const { activeHierarchy, hierarchyNames, workspaceMode, checkIsMonthLocked } = useGlobalApp();
   const toast = useToast();
@@ -80,6 +92,20 @@ const InsulinDispensingPage = () => {
     unitPrice: '',
     totalCost: '0.00'
   });
+  const [allMode, setAllMode] = useState(false);
+  const ALL_CATEGORY_NAME = 'الكل';
+  const individualCategories = useMemo(() => categories.filter(c => c.name.trim() !== ALL_CATEGORY_NAME), [categories]);
+
+  // Funding categories visible depend on the selected type:
+  // مجاني (free) => هيئة / طلاب / رضع / مرأة معيلة (all)
+  // مدعم (commercial/supported) => هيئة / طلاب / رضع (exclude مرأة معيلة)
+  const visibleCategories = useMemo(() => {
+    if (!formData.typeId) return individualCategories;
+    if (isSubsidizedType(formData.typeId)) {
+      return individualCategories.filter(c => !String(c.name || '').trim().includes('معيل'));
+    }
+    return individualCategories;
+  }, [individualCategories, formData.typeId]);
 
    
    
@@ -127,6 +153,7 @@ const InsulinDispensingPage = () => {
       key: 'Escape',
       handler: () => {
         setEditingId(null);
+        setAllMode(false);
         setFormData({
           typeId: '',
           codeId: '',
@@ -196,6 +223,62 @@ const InsulinDispensingPage = () => {
     setFormData({ ...formData, unitPrice: p, totalCost: (price * qty).toFixed(2) });
   };
 
+  const runEntryCheck = useCallback(async (typeName, all, categoryId) => {
+    if (!typeName) return { allowed: true, message: null };
+    if (!all && !categoryId) return { allowed: true, message: null };
+    try {
+      const categoryName = all ? null : (categories.find(c => c.id === parseInt(categoryId))?.name || null);
+      return await invoke('check_insulin_entry_allowed', {
+        type_: typeName,
+        branchId: parseInt(hierarchy.branchId),
+        areaId: hierarchy.areaId ? parseInt(hierarchy.areaId) : null,
+        clinicId: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,
+        dispenseMonth: hierarchy.dispenseMonth,
+        allMode: all,
+        category: categoryName
+      });
+    } catch (err) {
+      return { allowed: true, message: null };
+    }
+  }, [categories, hierarchy.branchId, hierarchy.areaId, hierarchy.clinicId, hierarchy.dispenseMonth]);
+
+  const handleCategorySelect = async (e) => {
+    const val = e.target.value;
+    if (!formData.typeId) {
+      toast.warning('يرجى اختيار النوع (مجاني/مدعم) أولاً');
+      return;
+    }
+    const result = await runEntryCheck(formData.typeId, false, val);
+    if (!result.allowed) {
+      toast.error(result.message || 'لا يمكن الإدخال');
+      return;
+    }
+    setAllMode(false);
+    setFormData({ ...formData, categoryId: val, codeId: '' });
+  };
+
+  const handleAllMode = async () => {
+    const desired = !allMode;
+    if (!formData.typeId) {
+      toast.warning('يرجى اختيار النوع (مجاني/مدعم) أولاً');
+      return;
+    }
+    const result = await runEntryCheck(formData.typeId, desired, null);
+    if (!result.allowed) {
+      toast.error(result.message || 'لا يمكن الإدخال');
+      return;
+    }
+    setAllMode(desired);
+    setFormData({ ...formData, categoryId: desired ? '' : formData.categoryId, codeId: '' });
+  };
+
+  const handleTypeSelect = async (e) => {
+    const val = e.target.value;
+    setFormData({ ...formData, typeId: val, categoryId: '', codeId: '' });
+    setAllMode(false);
+    setPreviousPrices([]);
+  };
+
   const handleAddToSubList = (e) => {
     e.preventDefault();
     if (!formData.codeId || !formData.quantity || !formData.unitPrice || !formData.casesCount) {
@@ -205,17 +288,17 @@ const InsulinDispensingPage = () => {
     const selected = codes.find(c => c.id === parseInt(formData.codeId));
     if (!selected) return;
 
-    const selectedCategory = categories.find(c => c.id === parseInt(formData.categoryId))?.name || '--';
-    const selectedType = types.find(t => t.id === formData.typeId)?.name || '--';
+    const selectedCategory = allMode ? ALL_CATEGORY_NAME : (categories.find(c => c.id === parseInt(formData.categoryId))?.name || '--');
+    const selectedType = formData.typeId || '--';
 
     // Duplicate Check: same item, same price, same category, same type
     const isDuplicate = subList.some(item => 
-      item.codeId === formData.codeId && 
-      item.categoryId === formData.categoryId &&
-      item.typeId === formData.typeId &&
+      (item.codeId === formData.codeId || item.insulin_code_id === selected.id || item.name === selected.name) && 
+      item.category === selectedCategory &&
+      (item.typeId === formData.typeId || item.type === selectedType) &&
       parseFloat(item.unitPrice).toFixed(2) === parseFloat(formData.unitPrice).toFixed(2)
     ) || history.some(item => 
-      item.insulin_code_id === parseInt(formData.codeId) && 
+      (item.insulin_code_id === selected.id || item.name === selected.name) && 
       item.category === selectedCategory &&
       item.type_ === selectedType &&
       parseFloat(item.price).toFixed(2) === parseFloat(formData.unitPrice).toFixed(2)
@@ -248,6 +331,7 @@ const InsulinDispensingPage = () => {
       unitPrice: '',
       totalCost: '0.00'
     });
+    setAllMode(false);
   };
 
   const handleSaveAll = async () => {
@@ -255,7 +339,7 @@ const InsulinDispensingPage = () => {
     setSavingAll(true);
     let successCount = 0;
     let skipCount = 0;
-    let lastError = '';
+    const failures = [];
 
     try {
       for (const item of subList) {
@@ -279,20 +363,36 @@ const InsulinDispensingPage = () => {
           };
           await invoke('save_insulin_dispensed', { data: payload });
           successCount++;
+          item._saved = true;
         } catch (err) {
-          if (err?.toString().includes("مكرر")) skipCount++;
-          else lastError = err;
+          if (String(err).includes("مكرر") || String(err).includes("بنفس السعر")) {
+            skipCount++;
+          } else {
+            failures.push({ item, error: err });
+          }
         }
       }
 
-      if (successCount > 0) {
+      if (failures.length === 0 && skipCount === 0) {
         toast.success(`تم حفظ ${successCount} سجلات بنجاح.`);
         setSubList([]);
-      } else if (skipCount > 0) {
-        toast.info(`تم تخطي ${skipCount} سجلات مكررة.`);
+      } else if (failures.length === 0) {
+        toast.success(`تم حفظ ${successCount} سجلات وتخطي ${skipCount} سجلات مكررة.`);
         setSubList([]);
-      } else if (lastError) {
-        toast.error(`فشل الحفظ: ${lastError}`);
+      } else {
+        // Partial or total failure: keep unsaved items in the sub-list, drop only saved ones.
+        const failedItems = subList.filter(it => !it._saved);
+        let msg = `تم حفظ ${successCount} من ${subList.length} سجلات.\n`;
+        if (failures.length > 0) {
+          msg += 'سجلات لم يتم حفظها:\n' + failures.map(f => `- ${f.item.category} / ${f.item.name} / سعر ${f.item.unitPrice}: ${String(f.error)}`).join('\n');
+        }
+        if (skipCount > 0) msg += `\nتخطي ${skipCount} سجلات مكررة.`;
+        if (successCount > 0) {
+          toast.error(msg);
+          setSubList(failedItems.length > 0 ? failedItems : []);
+        } else {
+          toast.error(msg);
+        }
       }
       loadHistory();
     } catch (err) {
@@ -545,9 +645,19 @@ const InsulinDispensingPage = () => {
       cases: data.reduce((sum, item) => sum + (parseInt(item.cases_count) || 0), 0),
       count: data.length
     });
+    const calcByType = (data) => {
+      const subsidized = data.filter(i => isSubsidizedType(i.type_));
+      const free = data.filter(i => isFreeType(i.type_));
+      return {
+        subsidized: calc(subsidized),
+        free: calc(free),
+      };
+    };
     return {
       all: calc(history),
-      filtered: calc(displayHistory)
+      filtered: calc(displayHistory),
+      allByType: calcByType(history),
+      filteredByType: calcByType(displayHistory),
     };
   }, [history, displayHistory]);
 
@@ -561,6 +671,22 @@ const InsulinDispensingPage = () => {
       color: 'var(--color-success)'
     },
     {
+      label: 'المدعم — التكلفة',
+      value: stats.allByType.subsidized.cost,
+      filteredValue: stats.filteredByType.subsidized.cost,
+      type: 'currency',
+      icon: DollarSign,
+      color: 'var(--color-primary)'
+    },
+    {
+      label: 'المجاني — التكلفة',
+      value: stats.allByType.free.cost,
+      filteredValue: stats.filteredByType.free.cost,
+      type: 'currency',
+      icon: DollarSign,
+      color: 'var(--color-info)'
+    },
+    {
       label: 'إجمالي الحالات',
       value: stats.all.cases,
       filteredValue: stats.filtered.cases,
@@ -569,14 +695,149 @@ const InsulinDispensingPage = () => {
       color: 'var(--color-warning)'
     },
     {
-      label: 'إجمالي الكميات',
-      value: stats.all.qty,
-      filteredValue: stats.filtered.qty,
+      label: 'المدعم — الكميات',
+      value: stats.allByType.subsidized.qty,
+      filteredValue: stats.filteredByType.subsidized.qty,
+      type: 'number',
+      icon: Hash,
+      color: 'var(--color-primary)'
+    },
+    {
+      label: 'المجاني — الكميات',
+      value: stats.allByType.free.qty,
+      filteredValue: stats.filteredByType.free.qty,
       type: 'number',
       icon: Hash,
       color: 'var(--color-info)'
+    },
+  ], [stats.all, stats.filtered, stats.allByType, stats.filteredByType]);
+
+  const insulinExportColumns = [
+    { header: "الصنف", accessor: "name" },
+    { header: "الكمية", accessor: (r) => (r.quantity ?? 0).toString() },
+    { header: "عدد الحالات", accessor: (r) => (r.cases_count ?? 0).toString() },
+    { header: "سعر الوحدة", accessor: (r) => parseFloat(r.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+    { header: "القيمة", accessor: (r) => parseFloat(r.cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+  ];
+
+  const insulinTables = useMemo(() => {
+    const subsidized = displayHistory.filter(i => isSubsidizedType(i.type_));
+    const free = displayHistory.filter(i => isFreeType(i.type_));
+    const tables = [];
+    if (subsidized.length > 0) tables.push({ data: subsidized, columns: insulinExportColumns, title: 'المدعم' });
+    if (free.length > 0) tables.push({ data: free, columns: insulinExportColumns, title: 'المجاني' });
+    return tables;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayHistory]);
+
+  const handleCustomExport = useCallback(async (type, { data, columns: cols, options: exportOpts }) => {
+    if (type === 'excel') {
+      const { exportMultiSheetExcel } = await import('../../../utils/exportExcel');
+      
+      const subsidizedRecords = data.filter(i => isSubsidizedType(i.type_));
+      const freeRecords = data.filter(i => isFreeType(i.type_));
+
+      const sheetsData = {};
+      
+      if (subsidizedRecords.length > 0) {
+        sheetsData['المدعم'] = {
+          data: subsidizedRecords,
+          columns: cols,
+          options: {
+            ...exportOpts,
+            title: `${exportOpts.title || 'سجلات صرف الأنسولين'} (المدعم)`,
+          }
+        };
+      }
+      
+      if (freeRecords.length > 0) {
+        sheetsData['المجاني'] = {
+          data: freeRecords,
+          columns: cols,
+          options: {
+            ...exportOpts,
+            title: `${exportOpts.title || 'سجلات صرف الأنسولين'} (المجاني)`,
+          }
+        };
+      }
+
+      if (Object.keys(sheetsData).length === 0 || (subsidizedRecords.length > 0 && freeRecords.length > 0)) {
+        sheetsData['كافة السجلات'] = {
+          data,
+          columns: cols,
+          options: exportOpts,
+        };
+      }
+
+      const totalCost = data.reduce((sum, item) => sum + (parseFloat(item.cost) || 0), 0);
+      const totalQty = data.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0);
+      const totalCases = data.reduce((sum, item) => sum + (parseInt(item.cases_count) || 0), 0);
+      
+      const subCost = subsidizedRecords.reduce((sum, item) => sum + (parseFloat(item.cost) || 0), 0);
+      const freeCost = freeRecords.reduce((sum, item) => sum + (parseFloat(item.cost) || 0), 0);
+
+      const summaryRows = [
+        ['إجمالي عدد السجلات', String(data.length)],
+        ['إجمالي الكمية', totalQty.toLocaleString(undefined, { maximumFractionDigits: 2 })],
+        ['إجمالي عدد الحالات', totalCases.toLocaleString()],
+        ['إجمالي التكلفة', totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ج.م'],
+      ];
+
+      if (subsidizedRecords.length > 0) {
+        summaryRows.push(['تكلفة المدعم', subCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ج.م']);
+        summaryRows.push(['سجلات المدعم', String(subsidizedRecords.length)]);
+      }
+      if (freeRecords.length > 0) {
+        summaryRows.push(['تكلفة المجاني', freeCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ج.م']);
+        summaryRows.push(['سجلات المجاني', String(freeRecords.length)]);
+      }
+
+      if (exportOpts.hierarchyLabel) {
+        summaryRows.push(['النطاق الإداري', exportOpts.hierarchyLabel]);
+      }
+      if (exportOpts.month || exportOpts.monthLabel) {
+        summaryRows.push(['الشهر', exportOpts.month || exportOpts.monthLabel]);
+      }
+
+      await exportMultiSheetExcel(sheetsData, {
+        fileName: exportOpts.fileName || `insulin_dispensing_${hierarchy.dispenseMonth}`,
+        title: exportOpts.title || 'سجلات صرف الأنسولين',
+        hierarchyLabel: exportOpts.hierarchyLabel,
+        summaryData: {
+          headers: ['البيان', 'القيمة'],
+          rows: summaryRows,
+        },
+      });
+
+      return true;
     }
-  ], [stats.all, stats.filtered]);
+
+    if (type === 'pdf') {
+      const { exportToPDF } = await import('../../../utils/exportPdf');
+      const subsidizedRecords = data.filter(i => isSubsidizedType(i.type_));
+      const freeRecords = data.filter(i => isFreeType(i.type_));
+      const tables = [];
+      if (subsidizedRecords.length > 0) tables.push({ data: subsidizedRecords, columns: cols, title: 'المدعم' });
+      if (freeRecords.length > 0) tables.push({ data: freeRecords, columns: cols, title: 'المجاني' });
+      if (tables.length === 0) tables.push({ data, columns: cols, title: exportOpts.title || 'سجلات صرف الأنسولين' });
+      await exportToPDF(data, cols, { ...exportOpts, tables });
+      return true;
+    }
+
+    if (type === 'word') {
+      const { exportToWord } = await import('../../../utils/exportWord');
+      const subsidizedRecords = data.filter(i => isSubsidizedType(i.type_));
+      const freeRecords = data.filter(i => isFreeType(i.type_));
+      const tables = [];
+      if (subsidizedRecords.length > 0) tables.push({ data: subsidizedRecords, columns: cols, title: 'المدعم' });
+      if (freeRecords.length > 0) tables.push({ data: freeRecords, columns: cols, title: 'المجاني' });
+      if (tables.length === 0) tables.push({ data, columns: cols, title: exportOpts.title || 'سجلات صرف الأنسولين' });
+      await exportToWord(data, cols, { ...exportOpts, tables });
+      return true;
+    }
+
+    return false;
+  }, [hierarchy.dispenseMonth]);
 
   return (
     <>
@@ -605,20 +866,36 @@ const InsulinDispensingPage = () => {
             <Card className="p-6 h-full shadow-sm">
               <form onSubmit={handleAddToSubList} className="space-y-6">
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <Select 
-                        label="الفئة (هيئة/طلاب)" icon={Layers}
-                        options={categories.map(c => ({ value: c.id, label: c.name }))}
-                        value={formData.categoryId}
-                        onChange={(e) => setFormData({ ...formData, categoryId: e.target.value, codeId: '' })}
-                        required
-                        data-focus="first-input"
-                        disabled={monthLocked}
-                      />
+                      <div>
+                        <Select 
+                          label={allMode ? 'الفئة (الكل)' : 'الفئة (هيئة/طلاب)'} icon={Layers}
+                          options={visibleCategories.map(c => ({ value: c.id, label: c.name }))}
+                          value={formData.categoryId}
+                          onChange={handleCategorySelect}
+                          required={!allMode}
+                          data-focus="first-input"
+                          disabled={monthLocked || allMode}
+                        />
+                        <div className="mt-2">
+                          <button
+                            type="button"
+                            onClick={handleAllMode}
+                            disabled={monthLocked}
+                            className={`w-full px-4 py-2.5 rounded-xl text-sm font-bold border-2 border-dashed transition-all flex items-center justify-center gap-2 ${
+                              allMode
+                                ? 'bg-primary text-white border-primary shadow-sm'
+                                : 'bg-[var(--color-bg-card)] text-primary border-primary/40 hover:bg-primary/5'
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          >
+                            <Layers size={14} /> {allMode ? 'وضع الكل مفعّل' : 'الكل'}
+                          </button>
+                        </div>
+                      </div>
                       <Select 
                         label="النوع (مدعم/مجاني)" icon={Tag}
                         options={types.map(t => ({ value: t.name, label: t.name }))}
                         value={formData.typeId}
-                        onChange={(e) => setFormData({ ...formData, typeId: e.target.value, codeId: '' })}
+                        onChange={handleTypeSelect}
                         required
                         disabled={monthLocked}
                       />
@@ -770,27 +1047,23 @@ const InsulinDispensingPage = () => {
             <StatsBar stats={statsBarItems} accentColor="var(--color-primary)" />
           </div>
 
-          <div className="bg-[var(--color-bg-card)] rounded-2xl border border-[var(--color-border)] shadow-sm overflow-hidden print:border-none print:shadow-none print:bg-transparent">
+          <div className="bg-[var(--color-bg-card)] rounded-2xl border border-[var(--color-border)] shadow-sm print:border-none print:shadow-none print:bg-transparent">
             <div className="print:hidden">
               <div className="no-print p-4 bg-[var(--color-bg-card)] border-b border-[var(--color-border)] flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-center gap-2 font-black text-slate-700 dark:text-slate-200">
                   <History size={18} className="text-primary" />
                   <span>سجلات صرف الأنسولين</span>
                   <ExportMenu 
-                    data={history} 
-                    columns={[
-                      { header: "الكود", accessor: "code" },
-                      { header: "التصنيف", accessor: "categoryName" },
-                      { header: "الكمية", accessor: (r) => r.quantity?.toString() || "0" },
-                      { header: "سعر الوحدة", accessor: (r) => parseFloat(r.unit_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
-                      { header: "الإجمالي", accessor: (r) => parseFloat(r.total_cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
-                      { header: "الشهر", accessor: "dispense_month" },
-                    ]} 
+                    data={displayHistory} 
+                    columns={insulinExportColumns}
                     options={{ 
                       title: 'سجلات صرف الأنسولين', 
                       fileName: `insulin_dispensing_${hierarchy.dispenseMonth}`,
-                      // hierarchy label is auto-populated by ExportMenuInner from context
+                      month: hierarchy.dispenseMonth,
+                      hierarchyLabel: buildHierarchyLabel(workspaceMode, hierarchyNames),
+                      tables: insulinTables,
                     }} 
+                    onCustomExport={handleCustomExport}
                   />
                 </div>
 
@@ -933,7 +1206,39 @@ const InsulinDispensingPage = () => {
                   <tfoot className="print-table-footer">
                     <tr className="bg-[var(--color-bg-card)] border-t-2 border-[var(--color-border)] font-black text-[var(--color-text)]">
                       <td className="p-4 text-right">
-                        الإجمالي المفلتر ({stats.filtered.count} سجل):
+                        المدعم ({stats.filteredByType.subsidized.count} سجل):
+                      </td>
+                      <td className="p-4 text-center text-primary">
+                        {stats.filteredByType.subsidized.qty.toLocaleString()}
+                      </td>
+                      <td className="p-4 text-center text-amber-600">
+                        {stats.filteredByType.subsidized.cases.toLocaleString()}
+                      </td>
+                      <td className="p-4"></td>
+                      <td className="p-4 text-center text-[var(--color-success)]">
+                        {stats.filteredByType.subsidized.cost.toLocaleString()} ج.م
+                      </td>
+                      <td className="p-4"></td>
+                    </tr>
+                    <tr className="bg-[var(--color-bg-card)] border-t border-[var(--color-border)] font-black text-[var(--color-text)]">
+                      <td className="p-4 text-right">
+                        المجاني ({stats.filteredByType.free.count} سجل):
+                      </td>
+                      <td className="p-4 text-center text-primary">
+                        {stats.filteredByType.free.qty.toLocaleString()}
+                      </td>
+                      <td className="p-4 text-center text-amber-600">
+                        {stats.filteredByType.free.cases.toLocaleString()}
+                      </td>
+                      <td className="p-4"></td>
+                      <td className="p-4 text-center text-[var(--color-success)]">
+                        {stats.filteredByType.free.cost.toLocaleString()} ج.م
+                      </td>
+                      <td className="p-4"></td>
+                    </tr>
+                    <tr className="bg-[var(--color-bg-card)] border-t-2 border-[var(--color-border)] font-black text-[var(--color-text)]">
+                      <td className="p-4 text-right">
+                        الإجمالي ({stats.filtered.count} سجل):
                       </td>
                       <td className="p-4 text-center text-primary">
                         {stats.filtered.qty.toLocaleString()}
@@ -963,28 +1268,40 @@ const InsulinDispensingPage = () => {
                   <thead>
                     <tr className="bg-slate-50 border-b border-black">
                       <th className="p-2 border border-black">الصنف</th>
-                      <th className="p-2 border border-black text-center">التصنيف</th>
                       <th className="p-2 border border-black text-center">الكمية</th>
-                      <th className="p-2 border border-black text-center">الحالات</th>
+                      <th className="p-2 border border-black text-center">عدد الحالات</th>
                       <th className="p-2 border border-black text-center">سعر الوحدة</th>
-                      <th className="p-2 border border-black text-center">الإجمالي</th>
+                      <th className="p-2 border border-black text-center">القيمة</th>
                     </tr>
                   </thead>
                   <tbody>
                     {displayHistory.map((reg) => (
                       <tr key={reg.id} className="border-b border-black">
                         <td className="p-2 border border-black font-bold">{reg.name}</td>
-                        <td className="p-2 border border-black text-center">{reg.category}</td>
                         <td className="p-2 border border-black text-center">{reg.quantity} {reg.unit}</td>
                         <td className="p-2 border border-black text-center">{reg.cases_count}</td>
                         <td className="p-2 border border-black text-center">{parseFloat(reg.price || 0).toFixed(2)}</td>
-                        <td className="p-2 border border-black text-center font-bold">{parseFloat(reg.cost || 0).toFixed(2)}</td>
+                        <td className="p-2 border border-black text-center font-bold">{parseFloat(reg.cost || 0).toFixed(2)} ج.م</td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
+                    <tr className="font-bold border-t border-black">
+                      <td className="p-2 text-right">المدعم ({stats.filteredByType.subsidized.count} سجل):</td>
+                      <td className="p-2 text-center border border-black">{stats.filteredByType.subsidized.qty.toLocaleString()}</td>
+                      <td className="p-2 text-center border border-black">{stats.filteredByType.subsidized.cases.toLocaleString()}</td>
+                      <td className="p-2 border border-black"></td>
+                      <td className="p-2 text-center border border-black">{stats.filteredByType.subsidized.cost.toLocaleString()} ج.م</td>
+                    </tr>
+                    <tr className="font-bold border-t border-black">
+                      <td className="p-2 text-right">المجاني ({stats.filteredByType.free.count} سجل):</td>
+                      <td className="p-2 text-center border border-black">{stats.filteredByType.free.qty.toLocaleString()}</td>
+                      <td className="p-2 text-center border border-black">{stats.filteredByType.free.cases.toLocaleString()}</td>
+                      <td className="p-2 border border-black"></td>
+                      <td className="p-2 text-center border border-black">{stats.filteredByType.free.cost.toLocaleString()} ج.م</td>
+                    </tr>
                     <tr className="font-bold border-t-2 border-black bg-slate-50">
-                      <td colSpan={2} className="p-2 text-right">الإجمالي العام:</td>
+                      <td className="p-2 text-right">الإجمالي العام ({stats.filtered.count} سجل):</td>
                       <td className="p-2 text-center border border-black">{stats.filtered.qty.toLocaleString()}</td>
                       <td className="p-2 text-center border border-black">{stats.filtered.cases.toLocaleString()}</td>
                       <td className="p-2 border border-black"></td>
