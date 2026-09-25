@@ -224,16 +224,6 @@ const searchablePages = [
     role: 'data_entry',
   },
   {
-    path: '/transactions/branch-batch-summary',
-    label: 'ملخص الفروع (دفعة واحدة)',
-    desc: 'إدخال ملخص بيانات الفروع دفعة واحدة',
-    icon: Building2,
-    group: 'transactions',
-    groupLabel: 'عمليات الصرف',
-    keywords: 'ملخص branch batch فرع دفعة',
-    role: 'data_entry',
-  },
-  {
     path: '/transactions/quick-tickets',
     label: 'إدخال سريع للتذاكر',
     desc: 'إدخال سريع للتذاكر الطبية',

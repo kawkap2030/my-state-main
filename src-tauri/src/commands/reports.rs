@@ -88,7 +88,7 @@ pub fn get_reconciliation_report(
                 COALESCE(SUM(drugs_free_students), 0),
                 COALESCE(SUM(drugs_free_infants), 0),
                 COALESCE(SUM(drugs_free_breadwinner_women), 0)
-         FROM monthly_drugs_dispensed 
+         FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) 
          WHERE branch_id = ?1 AND dispense_month = ?2",
         rusqlite::params![branchId, dispenseMonth],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
@@ -118,7 +118,7 @@ pub fn get_reconciliation_report(
         "SELECT COALESCE(SUM(drugs_supported_authority_value), 0),
                 COALESCE(SUM(drugs_supported_students_value), 0),
                 COALESCE(SUM(drugs_supported_infants_value), 0)
-         FROM monthly_drugs_dispensed 
+         FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) 
          WHERE branch_id = ?1 AND dispense_month = ?2",
         rusqlite::params![branchId, dispenseMonth],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
@@ -523,7 +523,7 @@ pub fn get_analytical_report(
     let monthly_sql = format!(
         "SELECT SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women),
                 SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value)
-         FROM monthly_drugs_dispensed {}", 
+         FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) {}", 
         where_clause
     );
     let (free_total, supported_total): (Option<f64>, Option<f64>) = conn.query_row(
@@ -584,12 +584,12 @@ pub fn get_financial_report(
 
     let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
 
-    // 1. Patient Share & Supported Values from monthly_drugs_dispensed
+    // 1. Patient Share & Supported Values from the authoritative split tables
     let monthly_sql = format!(
         "SELECT SUM(drugs_supported_authority_patient_share + drugs_supported_students_patient_share + drugs_supported_infants_patient_share),
                 SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value),
                 SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women)
-         FROM monthly_drugs_dispensed {}", 
+         FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) {}", 
         where_clause
     );
     let (patient_share, supported_val, free_val): (Option<f64>, Option<f64>, Option<f64>) = conn.query_row(
@@ -784,7 +784,7 @@ pub fn get_cost_breakdown_report(
     }
 
     // 4. Free Drugs
-    let sql = format!("SELECT dispense_month, COALESCE(SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women), 0) FROM monthly_drugs_dispensed WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
+    let sql = format!("SELECT dispense_month, COALESCE(SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women), 0) FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut map = std::collections::HashMap::new();
     for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).map_err(|e| e.to_string())?.flatten() {
@@ -795,7 +795,7 @@ pub fn get_cost_breakdown_report(
     }
 
     // 5. Supported Drugs
-    let sql = format!("SELECT dispense_month, COALESCE(SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value), 0) FROM monthly_drugs_dispensed WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
+    let sql = format!("SELECT dispense_month, COALESCE(SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value), 0) FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) WHERE dispense_month IN ({}) {} GROUP BY dispense_month", month_list, hierarchy_clause);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let mut map = std::collections::HashMap::new();
     for row in stmt.query_map(params_ref.as_slice(), |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))).map_err(|e| e.to_string())?.flatten() {
@@ -939,72 +939,6 @@ pub struct MonthlyDrugsDispensedRangeRow {
     pub sup_infants: f64,
     pub sup_patient_share: f64,
     pub clinic_name: Option<String>,
-}
-
-#[tauri::command]
-#[allow(non_snake_case)]
-pub fn get_monthly_drugs_dispensed_range(
-    state: State<'_, AppState>,
-    branchId: i32,
-    areaId: Option<i32>,
-    clinicId: Option<i32>,
-    startMonth: String,
-    endMonth: String,
-) -> Result<Vec<MonthlyDrugsDispensedRangeRow>, String> {
-    let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
-    let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
-
-    let mut sql = "SELECT m.branch_id, m.area_id, m.clinic_id, m.dispense_month,
-                          m.drugs_free_authority, m.drugs_free_students, m.drugs_free_infants, m.drugs_free_breadwinner_women,
-                          m.drugs_supported_authority_value, m.drugs_supported_students_value, m.drugs_supported_infants_value,
-                          (m.drugs_supported_authority_patient_share + m.drugs_supported_students_patient_share + m.drugs_supported_infants_patient_share) as total_patient_share,
-                          c.name as clinic_name
-                   FROM monthly_drugs_dispensed m
-                   LEFT JOIN clinics c ON m.clinic_id = c.id
-                   WHERE m.dispense_month >= ?1 AND m.dispense_month <= ?2".to_string();
-    
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
-        Box::new(startMonth),
-        Box::new(endMonth),
-    ];
-
-    if let Some(cid) = clinicId {
-        sql.push_str(" AND m.clinic_id = ?3");
-        params.push(Box::new(cid));
-    } else if let Some(aid) = areaId {
-        sql.push_str(" AND m.area_id = ?3");
-        params.push(Box::new(aid));
-    } else {
-        sql.push_str(" AND m.branch_id = ?3");
-        params.push(Box::new(branchId));
-    }
-
-    let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-
-    let rows = stmt.query_map(params_ref.as_slice(), |row| {
-        Ok(MonthlyDrugsDispensedRangeRow {
-            branch_id: row.get(0)?,
-            area_id: row.get(1)?,
-            clinic_id: row.get(2)?,
-            dispense_month: row.get(3)?,
-            free_authority: row.get(4)?,
-            free_students: row.get(5)?,
-            free_infants: row.get(6)?,
-            free_women: row.get(7)?,
-            sup_authority: row.get(8)?,
-            sup_students: row.get(9)?,
-            sup_infants: row.get(10)?,
-            sup_patient_share: row.get(11)?,
-            clinic_name: row.get(12)?,
-        })
-    }).map_err(|e| e.to_string())?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(result)
 }
 
 #[tauri::command]
@@ -1284,7 +1218,7 @@ pub fn get_executive_report_summary(
         &format!("SELECT SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women),
                         SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value),
                         SUM(drugs_supported_authority_patient_share + drugs_supported_students_patient_share + drugs_supported_infants_patient_share)
-                 FROM monthly_drugs_dispensed {}", where_clause),
+                 FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) {}", where_clause),
         params_ref.as_slice(),
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     ).unwrap_or((None, None, None));
@@ -1511,7 +1445,7 @@ pub fn get_demographic_report(
                 SUM(drugs_supported_students_patient_share),
                 SUM(drugs_supported_infants_value),
                 SUM(drugs_supported_infants_patient_share)
-         FROM monthly_drugs_dispensed
+         FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t)
          {}
          GROUP BY dispense_month
          ORDER BY dispense_month ASC",
@@ -1985,7 +1919,7 @@ pub fn get_pivot_data(
                 SELECT b.name, a.name, c.name, md.dispense_month,
                        md.drugs_free_authority, md.drugs_free_students, md.drugs_free_infants, md.drugs_free_breadwinner_women,
                        md.drugs_supported_authority_value, md.drugs_supported_students_value, md.drugs_supported_infants_value
-                FROM monthly_drugs_dispensed md
+                FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) md
                 JOIN branches b ON md.branch_id = b.id
                 JOIN areas a ON md.area_id = a.id
                 JOIN clinics c ON md.clinic_id = c.id
@@ -2214,7 +2148,7 @@ pub fn get_data_quality_report(
     if let Ok(mut stmt) = conn.prepare(
         "SELECT DISTINCT dispense_month FROM (
             SELECT dispense_month FROM detailed_drug_dispensed
-            UNION SELECT dispense_month FROM monthly_drugs_dispensed
+            UNION SELECT dispense_month FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t)
             UNION SELECT dispense_month FROM insulin_dispensed
             UNION SELECT dispense_month FROM medical_tickets WHERE dispense_month IS NOT NULL
             UNION SELECT dispense_month FROM monthly_supplies_dispensed
@@ -2239,7 +2173,7 @@ pub fn get_data_quality_report(
         ).unwrap_or(0);
 
         let clinics_with_monthly: i32 = conn.query_row(
-            "SELECT COUNT(DISTINCT clinic_id) FROM monthly_drugs_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL",
+            "SELECT COUNT(DISTINCT clinic_id) FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) WHERE dispense_month = ?1 AND clinic_id IS NOT NULL",
             [m], |r| r.get(0)
         ).unwrap_or(0);
 
@@ -2261,7 +2195,7 @@ pub fn get_data_quality_report(
         let branches_with_data: i32 = conn.query_row(
             "SELECT COUNT(DISTINCT branch_id) FROM (
                 SELECT branch_id FROM detailed_drug_dispensed WHERE dispense_month = ?1
-                UNION SELECT branch_id FROM monthly_drugs_dispensed WHERE dispense_month = ?1
+                UNION SELECT branch_id FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) WHERE dispense_month = ?1
                 UNION SELECT branch_id FROM insulin_dispensed WHERE dispense_month = ?1
             )",
             [m], |r| r.get(0)
@@ -2271,7 +2205,7 @@ pub fn get_data_quality_report(
         let active_clinics: i32 = conn.query_row(
             "SELECT COUNT(DISTINCT clinic_id) FROM (
                 SELECT clinic_id FROM detailed_drug_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
-                UNION SELECT clinic_id FROM monthly_drugs_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
+                UNION SELECT clinic_id FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
                 UNION SELECT clinic_id FROM insulin_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
                 UNION SELECT clinic_id FROM medical_tickets WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
                 UNION SELECT clinic_id FROM monthly_supplies_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
@@ -2316,13 +2250,13 @@ pub fn get_data_quality_report(
              SELECT DISTINCT clinic_id, dispense_month FROM detailed_drug_dispensed
              WHERE dispense_month < ?1 AND clinic_id IS NOT NULL
              UNION
-             SELECT DISTINCT clinic_id, dispense_month FROM monthly_drugs_dispensed
+             SELECT DISTINCT clinic_id, dispense_month FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t)
              WHERE dispense_month < ?1 AND clinic_id IS NOT NULL
          ) prev ON c.id = prev.clinic_id
          WHERE c.id NOT IN (
              SELECT DISTINCT clinic_id FROM detailed_drug_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
              UNION
-             SELECT DISTINCT clinic_id FROM monthly_drugs_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
+             SELECT DISTINCT clinic_id FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
              UNION
              SELECT DISTINCT clinic_id FROM insulin_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL
              UNION
@@ -2654,7 +2588,7 @@ pub fn get_compliance_report(
         JOIN areas a ON a.branch_id = b.id
         JOIN clinics c ON c.area_id = a.id
         LEFT JOIN (SELECT DISTINCT clinic_id FROM detailed_drug_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) d ON d.clinic_id = c.id
-        LEFT JOIN (SELECT DISTINCT clinic_id FROM monthly_drugs_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) md ON md.clinic_id = c.id
+        LEFT JOIN (SELECT DISTINCT clinic_id FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) md ON md.clinic_id = c.id
         LEFT JOIN (SELECT DISTINCT clinic_id FROM insulin_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) i ON i.clinic_id = c.id
         LEFT JOIN (SELECT DISTINCT clinic_id FROM medical_tickets WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) t ON t.clinic_id = c.id
         LEFT JOIN (SELECT DISTINCT clinic_id FROM monthly_supplies_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) s ON s.clinic_id = c.id
@@ -2709,7 +2643,7 @@ pub fn get_compliance_report(
         JOIN areas a ON c.area_id = a.id
         JOIN branches b ON a.branch_id = b.id
         LEFT JOIN (SELECT DISTINCT clinic_id FROM detailed_drug_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) d ON d.clinic_id = c.id
-        LEFT JOIN (SELECT DISTINCT clinic_id FROM monthly_drugs_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) md ON md.clinic_id = c.id
+        LEFT JOIN (SELECT DISTINCT clinic_id FROM (SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, t.drugs_free_authority, t.drugs_free_students, t.drugs_free_infants, t.drugs_free_breadwinner_women, 0 AS drugs_supported_authority_value, 0 AS drugs_supported_authority_patient_share, 0 AS drugs_supported_students_value, 0 AS drugs_supported_students_patient_share, 0 AS drugs_supported_infants_value, 0 AS drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_free_drugs_dispensed t UNION ALL SELECT t.clinic_id, t.area_id, t.branch_id, t.dispense_month, 0 AS drugs_free_authority, 0 AS drugs_free_students, 0 AS drugs_free_infants, 0 AS drugs_free_breadwinner_women, t.drugs_supported_authority_value, t.drugs_supported_authority_patient_share, t.drugs_supported_students_value, t.drugs_supported_students_patient_share, t.drugs_supported_infants_value, t.drugs_supported_infants_patient_share, t.notes, t.created_at FROM monthly_supported_drugs_dispensed t) WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) md ON md.clinic_id = c.id
         LEFT JOIN (SELECT DISTINCT clinic_id FROM insulin_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) i ON i.clinic_id = c.id
         LEFT JOIN (SELECT DISTINCT clinic_id FROM medical_tickets WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) t ON t.clinic_id = c.id
         LEFT JOIN (SELECT DISTINCT clinic_id FROM monthly_supplies_dispensed WHERE dispense_month = ?1 AND clinic_id IS NOT NULL) s ON s.clinic_id = c.id

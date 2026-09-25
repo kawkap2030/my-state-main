@@ -273,7 +273,7 @@ const TemporalAnalysisHub = () => {
         }
 
         case 'free_drugs':
-          records = await invoke('get_monthly_drugs_dispensed_range', params);
+          records = await invoke('get_free_monthly_drugs_dispensed_range', params);
           enrichedRaw = records;
           aggregated = [
             { category: 'الهيئة', cost: records.reduce((sum, r) => sum + r.free_authority, 0) },
@@ -288,7 +288,7 @@ const TemporalAnalysisHub = () => {
           break;
 
         case 'supported_drugs':
-          records = await invoke('get_monthly_drugs_dispensed_range', params);
+          records = await invoke('get_supported_monthly_drugs_dispensed_range', params);
           enrichedRaw = records;
           aggregated = [
             { category: 'الهيئة (مشاركة)', cost: records.reduce((sum, r) => sum + r.sup_authority, 0) },

@@ -181,6 +181,7 @@ const FreeDrugsTotalsPage = () => {
         refreshTrigger={refreshTrigger}
         onEdit={handleEditRecord}
         onRefresh={handleCancelEdit}
+        hideDirectPrint
       />
     </div>
     </PrintableTable>

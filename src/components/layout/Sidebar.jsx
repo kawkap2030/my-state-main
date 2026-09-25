@@ -55,7 +55,6 @@ const menuGroups = [
       { to: '/transactions/medical-tickets', label: 'التذاكر الطبية', icon: ClipboardList },
       { to: '/transactions/quick-tickets', label: 'إدخال سريع للتذاكر', icon: ClipboardList },
       { to: '/transactions/judicial-dispensing', label: 'أحكام المحكمة', icon: Landmark },
-      { to: '/transactions/branch-batch-summary', label: 'ملخص الفروع (دفعة واحدة)', icon: Building2 },
     ],
   },
   {

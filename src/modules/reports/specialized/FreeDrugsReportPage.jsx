@@ -62,7 +62,7 @@ const FreeDrugsReportPage = () => {
     }
     setLoading(true);
     try {
-      const result = await invoke('get_report_monthly_drugs_dispensed', {
+      const result = await invoke('get_report_free_monthly_drugs_dispensed', {
         branchId: parseInt(hierarchy.branchId),
         areaId: hierarchy.areaId ? parseInt(hierarchy.areaId) : null,
         clinicId: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,

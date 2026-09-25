@@ -525,57 +525,6 @@ pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     }
     let _ = conn.execute_batch("UPDATE drug_group_codes SET code = id WHERE code IS NULL; UPDATE drug_group_codes SET description = name WHERE description IS NULL OR trim(description) = '';");
 
-    // monthly_drugs_dispensed nullable
-    {
-        let table_info: Result<Vec<(String, bool)>, _> = conn
-            .prepare("PRAGMA table_info(monthly_drugs_dispensed)")
-            .and_then(|mut stmt| stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(1)?, row.get::<_, bool>(3)?))
-            })?.collect());
-        if let Ok(columns) = table_info {
-            let clinic_notnull = columns.iter().any(|(n, nn)| n == "clinic_id" && *nn);
-            let area_notnull = columns.iter().any(|(n, nn)| n == "area_id" && *nn);
-            if clinic_notnull || area_notnull {
-                println!("[db] Migrating monthly_drugs_dispensed nullable...");
-                if let Err(e) = conn.execute_batch("
-                    BEGIN TRANSACTION;
-                    CREATE TABLE monthly_drugs_dispensed_new (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT, clinic_id INTEGER, area_id INTEGER,
-                        branch_id INTEGER NOT NULL, dispense_month TEXT NOT NULL,
-                        drugs_free_authority REAL DEFAULT 0, drugs_free_students REAL DEFAULT 0,
-                        drugs_free_infants REAL DEFAULT 0, drugs_free_breadwinner_women REAL DEFAULT 0,
-                        drugs_supported_authority_value REAL DEFAULT 0, drugs_supported_authority_patient_share REAL DEFAULT 0,
-                        drugs_supported_students_value REAL DEFAULT 0, drugs_supported_students_patient_share REAL DEFAULT 0,
-                        drugs_supported_infants_value REAL DEFAULT 0, drugs_supported_infants_patient_share REAL DEFAULT 0,
-                        notes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (clinic_id) REFERENCES clinics (id) ON DELETE CASCADE,
-                        FOREIGN KEY (area_id) REFERENCES areas (id) ON DELETE CASCADE,
-                        FOREIGN KEY (branch_id) REFERENCES branches (id) ON DELETE CASCADE
-                    );
-                    INSERT INTO monthly_drugs_dispensed_new (
-                        id, clinic_id, area_id, branch_id, dispense_month,
-                        drugs_free_authority, drugs_free_students, drugs_free_infants, drugs_free_breadwinner_women,
-                        drugs_supported_authority_value, drugs_supported_authority_patient_share,
-                        drugs_supported_students_value, drugs_supported_students_patient_share,
-                        drugs_supported_infants_value, drugs_supported_infants_patient_share, notes, created_at
-                    )
-                    SELECT id, clinic_id, area_id, branch_id, dispense_month,
-                        drugs_free_authority, drugs_free_students, drugs_free_infants, drugs_free_breadwinner_women,
-                        drugs_supported_authority_value, drugs_supported_authority_patient_share,
-                        drugs_supported_students_value, drugs_supported_students_patient_share,
-                        drugs_supported_infants_value, drugs_supported_infants_patient_share, notes, created_at
-                    FROM monthly_drugs_dispensed;
-                    DROP TABLE monthly_drugs_dispensed;
-                    ALTER TABLE monthly_drugs_dispensed_new RENAME TO monthly_drugs_dispensed;
-                    COMMIT;
-                ") {
-                    let _ = conn.execute("ROLLBACK", []);
-                    eprintln!("[db] migration monthly_drugs_dispensed failed (non-fatal): {}", e);
-                }
-            }
-        }
-    }
-
     // judicial_dispensed hierarchy
     {
         let table_info: Result<Vec<(String, bool)>, _> = conn
@@ -702,6 +651,70 @@ pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         "UPDATE scheduled_report_history SET status = 'cancelled', error_message = 'أُلغي تلقائياً (إغلاق التطبيق أثناء المعاينة)' WHERE status = 'running'",
         [],
     );
+
+    // ── PHASE 5: Final schema — split monthly-dispensing tables only ──
+    // Runs on EVERY launch (like the scheduled_reports block) so databases
+    // created by earlier phases have the two split tables guaranteed, while the
+    // legacy monthly_drugs_dispensed table and the read-only
+    // v_monthly_drugs_merged view are permanently removed. No archive, no
+    // migration, no fallback: every report/command reads directly from the two
+    // split tables. All statements below are idempotent.
+    if let Err(e) = conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS monthly_free_drugs_dispensed (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_id INTEGER NOT NULL,
+            area_id INTEGER NULL,
+            clinic_id INTEGER NULL,
+            dispense_month TEXT NOT NULL,
+            drugs_free_authority REAL NOT NULL DEFAULT 0,
+            drugs_free_students REAL NOT NULL DEFAULT 0,
+            drugs_free_infants REAL NOT NULL DEFAULT 0,
+            drugs_free_breadwinner_women REAL NOT NULL DEFAULT 0,
+            notes TEXT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NULL,
+            FOREIGN KEY (branch_id) REFERENCES branches (id) ON DELETE CASCADE,
+            FOREIGN KEY (area_id) REFERENCES areas (id) ON DELETE CASCADE,
+            FOREIGN KEY (clinic_id) REFERENCES clinics (id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_free_location_month
+        ON monthly_free_drugs_dispensed (branch_id, COALESCE(area_id, -1), COALESCE(clinic_id, -1), dispense_month);
+        CREATE TABLE IF NOT EXISTS monthly_supported_drugs_dispensed (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_id INTEGER NOT NULL,
+            area_id INTEGER NULL,
+            clinic_id INTEGER NULL,
+            dispense_month TEXT NOT NULL,
+            drugs_supported_authority_value REAL NOT NULL DEFAULT 0,
+            drugs_supported_authority_patient_share REAL NOT NULL DEFAULT 0,
+            drugs_supported_students_value REAL NOT NULL DEFAULT 0,
+            drugs_supported_students_patient_share REAL NOT NULL DEFAULT 0,
+            drugs_supported_infants_value REAL NOT NULL DEFAULT 0,
+            drugs_supported_infants_patient_share REAL NOT NULL DEFAULT 0,
+            notes TEXT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NULL,
+            FOREIGN KEY (branch_id) REFERENCES branches (id) ON DELETE CASCADE,
+            FOREIGN KEY (area_id) REFERENCES areas (id) ON DELETE CASCADE,
+            FOREIGN KEY (clinic_id) REFERENCES clinics (id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_supported_location_month
+        ON monthly_supported_drugs_dispensed (branch_id, COALESCE(area_id, -1), COALESCE(clinic_id, -1), dispense_month);
+        DROP VIEW IF EXISTS v_monthly_drugs_merged;
+        DROP TABLE IF EXISTS monthly_drugs_dispensed;
+    ") {
+        eprintln!("[db] PHASE 5 final schema housekeeping failed (non-fatal): {}", e);
+    }
+
+    // ── PHASE 5: Permanent removal of legacy monthly table & merged view ──
+    // The legacy monthly_drugs_dispensed table and the v_monthly_drugs_merged
+    // view were dropped above. Existing rows (any old archive data) are NOT
+    // migrated or preserved — per the Phase 5 directive archived data is
+    // removed outright; the current tables are authoritative. Any legacy rows
+    // that existed in an older database are intentionally discarded here.
+    if let Err(e) = conn.execute_batch("DROP VIEW IF EXISTS v_monthly_drugs_merged; DROP TABLE IF EXISTS monthly_drugs_dispensed;") {
+        eprintln!("[db] PHASE 5 legacy purge failed (non-fatal): {}", e);
+    }
 
     if let Ok(path) = std::fs::canonicalize(&db_path) {
         println!("[db] Database initialized at: {:?}", path);

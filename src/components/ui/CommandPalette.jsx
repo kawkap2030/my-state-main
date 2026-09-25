@@ -37,7 +37,6 @@ const ALL_ROUTES = [
   { id: 'medical-tickets',    path: '/transactions/medical-tickets',              label: 'التذاكر الطبية',         category: 'عمليات الصرف',    icon: ClipboardList,   role: 'data_entry' },
   { id: 'judicial-dispensing',path: '/transactions/judicial-dispensing',          label: 'أحكام المحكمة',          category: 'عمليات الصرف',    icon: Landmark,        role: 'data_entry' },
   { id: 'group-costs',        path: '/transactions/group-costs',                  label: 'تكلفة المجموعات',        category: 'عمليات الصرف',    icon: DollarSign,      role: 'data_entry' },
-  { id: 'branch-batch',       path: '/transactions/branch-batch-summary',         label: 'ملخص الفروع (دفعة)',     category: 'عمليات الصرف',    icon: Building2,       role: 'data_entry' },
   { id: 'quick-tickets',      path: '/transactions/quick-tickets',                label: 'إدخال سريع للتذاكر',     category: 'عمليات الصرف',    icon: ClipboardList,   role: 'data_entry' },
 
   // ── Reports ─────────────────────────────────────────────────────────────

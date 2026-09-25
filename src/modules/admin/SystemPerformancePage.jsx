@@ -25,7 +25,7 @@ const TABLES_ORDER = [
   'detailed_drug_dispensed', 'insulin_dispensed', 'drug_groups',
   'drug_group_codes', 'judicial_dispensed', 'judicial_patients',
   'judicial_medicines', 'judicial_patient_medicines', 'patient_pdfs',
-  'monthly_drugs_dispensed', 'monthly_supplies_dispensed',
+  'monthly_free_drugs_dispensed', 'monthly_supported_drugs_dispensed', 'monthly_supplies_dispensed',
   'medical_tickets', 'users', 'audit_log',
   'dispensing_month_isolation', 'manual_locked_months',
 ];
@@ -46,7 +46,8 @@ const TABLE_LABELS = {
   judicial_medicines: 'الأدوية القضائية',
   judicial_patient_medicines: 'أدوية المرضى القضائيين',
   patient_pdfs: 'ملفات المرضى',
-  monthly_drugs_dispensed: 'المنصرف الشهري (أدوية)',
+  monthly_free_drugs_dispensed: 'المنصرف الشهري (أدوية مجانية)',
+  monthly_supported_drugs_dispensed: 'المنصرف الشهري (أدوية مدعمة)',
   monthly_supplies_dispensed: 'المنصرف الشهري (مستلزمات)',
   medical_tickets: 'التذاكر الطبية',
   users: 'المستخدمون',
@@ -75,7 +76,7 @@ const TABLE_GROUPS = [
     tables: ['detailed_drug_dispensed', 'insulin_dispensed', 'drug_groups',
              'drug_group_codes', 'judicial_dispensed', 'judicial_patients',
              'judicial_medicines', 'judicial_patient_medicines', 'patient_pdfs',
-             'monthly_drugs_dispensed', 'monthly_supplies_dispensed', 'medical_tickets'],
+             'monthly_free_drugs_dispensed', 'monthly_supported_drugs_dispensed', 'monthly_supplies_dispensed', 'medical_tickets'],
   },
   {
     key: 'system',

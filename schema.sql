@@ -248,29 +248,51 @@ CREATE TABLE IF NOT EXISTS detailed_drug_dispensed (
     FOREIGN KEY (drug_id) REFERENCES drugs (id) ON DELETE CASCADE
 );
 
--- 7b. المنصرف الشهري الإجمالي
-CREATE TABLE IF NOT EXISTS monthly_drugs_dispensed (
+-- 7b. (محذوف — كان جدولاً قديماً للنّصر الشهري الإجمالي، أُزيل نهائياً في PHASE 5)
+
+-- 7c. المنصرف الشهري المجاني (فصل تخزين PHASE 1)
+CREATE TABLE IF NOT EXISTS monthly_free_drugs_dispensed (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    clinic_id INTEGER,
-    area_id INTEGER,
     branch_id INTEGER NOT NULL,
+    area_id INTEGER NULL,
+    clinic_id INTEGER NULL,
     dispense_month TEXT NOT NULL,
-    drugs_free_authority REAL DEFAULT 0,
-    drugs_free_students REAL DEFAULT 0,
-    drugs_free_infants REAL DEFAULT 0,
-    drugs_free_breadwinner_women REAL DEFAULT 0,
-    drugs_supported_authority_value REAL DEFAULT 0,
-    drugs_supported_authority_patient_share REAL DEFAULT 0,
-    drugs_supported_students_value REAL DEFAULT 0,
-    drugs_supported_students_patient_share REAL DEFAULT 0,
-    drugs_supported_infants_value REAL DEFAULT 0,
-    drugs_supported_infants_patient_share REAL DEFAULT 0,
-    notes TEXT,
+    drugs_free_authority REAL NOT NULL DEFAULT 0,
+    drugs_free_students REAL NOT NULL DEFAULT 0,
+    drugs_free_infants REAL NOT NULL DEFAULT 0,
+    drugs_free_breadwinner_women REAL NOT NULL DEFAULT 0,
+    notes TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (clinic_id) REFERENCES clinics (id) ON DELETE CASCADE,
+    updated_at TIMESTAMP NULL,
+    FOREIGN KEY (branch_id) REFERENCES branches (id) ON DELETE CASCADE,
     FOREIGN KEY (area_id) REFERENCES areas (id) ON DELETE CASCADE,
-    FOREIGN KEY (branch_id) REFERENCES branches (id) ON DELETE CASCADE
+    FOREIGN KEY (clinic_id) REFERENCES clinics (id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_free_location_month
+ON monthly_free_drugs_dispensed (branch_id, COALESCE(area_id, -1), COALESCE(clinic_id, -1), dispense_month);
+
+-- 7d. المنصرف الشهري المدعّم (فصل تخزين PHASE 1)
+CREATE TABLE IF NOT EXISTS monthly_supported_drugs_dispensed (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id INTEGER NOT NULL,
+    area_id INTEGER NULL,
+    clinic_id INTEGER NULL,
+    dispense_month TEXT NOT NULL,
+    drugs_supported_authority_value REAL NOT NULL DEFAULT 0,
+    drugs_supported_authority_patient_share REAL NOT NULL DEFAULT 0,
+    drugs_supported_students_value REAL NOT NULL DEFAULT 0,
+    drugs_supported_students_patient_share REAL NOT NULL DEFAULT 0,
+    drugs_supported_infants_value REAL NOT NULL DEFAULT 0,
+    drugs_supported_infants_patient_share REAL NOT NULL DEFAULT 0,
+    notes TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL,
+    FOREIGN KEY (branch_id) REFERENCES branches (id) ON DELETE CASCADE,
+    FOREIGN KEY (area_id) REFERENCES areas (id) ON DELETE CASCADE,
+    FOREIGN KEY (clinic_id) REFERENCES clinics (id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_supported_location_month
+ON monthly_supported_drugs_dispensed (branch_id, COALESCE(area_id, -1), COALESCE(clinic_id, -1), dispense_month);
 
 -- 8. المستلزمات الطبية
 CREATE TABLE IF NOT EXISTS supply_categories (

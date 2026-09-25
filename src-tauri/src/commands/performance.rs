@@ -78,17 +78,15 @@ pub fn get_performance_metrics(
     // 1. Detailed drugs
     let (detailed_c, detailed_s) = section_sql("total_cost", "detailed_drug_dispensed", "", &branch_filter);
 
-    // 2. Monthly drug totals (free + supported live in ONE table as columns)
+    // 2. Monthly drug totals. Phase 1 split the legacy combined table into two
+    //    dedicated tables (monthly_free_drugs_dispensed, monthly_supported_
+    //    drugs_dispensed); the combined "monthly totals" section merges the two
+    //    authoritative split tables. The legacy monthly_drugs_dispensed table is
+    //    archive-only and is deliberately excluded from the totals.
     let monthly_free_expr = "COALESCE(drugs_free_authority,0) + COALESCE(drugs_free_students,0) + COALESCE(drugs_free_infants,0) + COALESCE(drugs_free_breadwinner_women,0)";
     let monthly_supported_expr = "COALESCE(drugs_supported_authority_value,0) + COALESCE(drugs_supported_authority_patient_share,0) + COALESCE(drugs_supported_students_value,0) + COALESCE(drugs_supported_students_patient_share,0) + COALESCE(drugs_supported_infants_value,0) + COALESCE(drugs_supported_infants_patient_share,0)";
-    let (monthly_c, monthly_s) = section_sql(
-        &format!("{} + {}", monthly_free_expr, monthly_supported_expr),
-        "monthly_drugs_dispensed",
-        "",
-        &branch_filter,
-    );
-    let (monthly_free_c, monthly_free_s) = section_sql(monthly_free_expr, "monthly_drugs_dispensed", "", &branch_filter);
-    let (monthly_sup_c, monthly_sup_s) = section_sql(monthly_supported_expr, "monthly_drugs_dispensed", "", &branch_filter);
+    let (monthly_free_c, monthly_free_s) = section_sql(monthly_free_expr, "monthly_free_drugs_dispensed", "", &branch_filter);
+    let (monthly_sup_c, monthly_sup_s) = section_sql(monthly_supported_expr, "monthly_supported_drugs_dispensed", "", &branch_filter);
 
     // 3. Insulin (free/supported are rows in ONE table distinguished by type)
     let (ins_c, ins_s) = section_sql("cost", "insulin_dispensed", "", &branch_filter);
@@ -109,9 +107,10 @@ pub fn get_performance_metrics(
 
     let (detailed, detailed_has) = sum_section(&conn, &detailed_s, &detailed_c, &dispenseMonth, branchId);
 
-    let (monthly_total, monthly_has) = sum_section(&conn, &monthly_s, &monthly_c, &dispenseMonth, branchId);
-    let (monthly_free, _) = sum_section(&conn, &monthly_free_s, &monthly_free_c, &dispenseMonth, branchId);
-    let (monthly_sup, _) = sum_section(&conn, &monthly_sup_s, &monthly_sup_c, &dispenseMonth, branchId);
+    let (monthly_free, monthly_free_has) = sum_section(&conn, &monthly_free_s, &monthly_free_c, &dispenseMonth, branchId);
+    let (monthly_sup, monthly_sup_has) = sum_section(&conn, &monthly_sup_s, &monthly_sup_c, &dispenseMonth, branchId);
+    let monthly_total = monthly_free + monthly_sup;
+    let monthly_has = monthly_free_has || monthly_sup_has;
 
     let (ins_total, ins_has) = sum_section(&conn, &ins_s, &ins_c, &dispenseMonth, branchId);
     let (ins_free, _) = sum_section(&conn, &ins_free_s, &ins_free_c, &dispenseMonth, branchId);

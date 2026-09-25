@@ -35,7 +35,8 @@ fn check_month_data_exists_internal(
     dispense_month: &str,
 ) -> Result<bool, String> {
     let tables = vec![
-        "monthly_drugs_dispensed",
+        "monthly_free_drugs_dispensed",
+        "monthly_supported_drugs_dispensed",
         "detailed_drug_dispensed",
         "insulin_dispensed",
         "judicial_dispensed",

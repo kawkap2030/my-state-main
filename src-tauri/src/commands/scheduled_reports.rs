@@ -720,38 +720,15 @@ fn collect_report_data(
                 (rows, comparison)
             }
             "financial" => {
-                let cur_free = period_total(
-                    conn,
-                    "COALESCE(SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women), 0)",
-                    "monthly_drugs_dispensed",
-                    &filter,
-                    period_start,
-                    period_end,
-                );
-                let prev_free = period_total(
-                    conn,
-                    "COALESCE(SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women), 0)",
-                    "monthly_drugs_dispensed",
-                    &filter,
-                    &prev_start,
-                    &prev_end,
-                );
-                let cur_supported = period_total(
-                    conn,
-                    "COALESCE(SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value), 0)",
-                    "monthly_drugs_dispensed",
-                    &filter,
-                    period_start,
-                    period_end,
-                );
-                let prev_supported = period_total(
-                    conn,
-                    "COALESCE(SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value), 0)",
-                    "monthly_drugs_dispensed",
-                    &filter,
-                    &prev_start,
-                    &prev_end,
-                );
+                let free_expr = "COALESCE(SUM(drugs_free_authority + drugs_free_students + drugs_free_infants + drugs_free_breadwinner_women), 0)";
+                let supported_expr = "COALESCE(SUM(drugs_supported_authority_value + drugs_supported_students_value + drugs_supported_infants_value), 0)";
+                // Monthly drug financial totals come from the two authoritative
+                // split tables only. The legacy monthly_drugs_dispensed table is
+                // archive-only and is deliberately excluded (no double counting).
+                let cur_free = period_total(conn, free_expr, "monthly_free_drugs_dispensed", &filter, period_start, period_end);
+                let prev_free = period_total(conn, free_expr, "monthly_free_drugs_dispensed", &filter, &prev_start, &prev_end);
+                let cur_supported = period_total(conn, supported_expr, "monthly_supported_drugs_dispensed", &filter, period_start, period_end);
+                let prev_supported = period_total(conn, supported_expr, "monthly_supported_drugs_dispensed", &filter, &prev_start, &prev_end);
 
                 let rows = vec![
                     ("الأدوية المجانية".to_string(), money(cur_free)),

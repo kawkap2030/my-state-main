@@ -20,7 +20,8 @@ pub struct DashboardSummary {
 /// Count active dispensing entities for the month, at the level the data was
 /// actually entered at (triple-isolation rule): clinics take priority, then
 /// areas, then branches. Counts DISTINCT entities across all dispensed tables
-/// so the same unit entered in two tables is counted once.
+/// so the same unit entered in two tables is counted once. The legacy
+/// monthly_drugs_dispensed archive is excluded (archive-only).
 fn count_active_entities(
     conn: &rusqlite::Connection,
     branch_id: Option<i32>,
@@ -34,9 +35,10 @@ fn count_active_entities(
          UNION SELECT clinic_id, area_id, branch_id FROM medical_tickets WHERE dispense_month = ?1{}
          UNION SELECT clinic_id, area_id, branch_id FROM judicial_dispensed WHERE dispense_month = ?1{}
          UNION SELECT clinic_id, area_id, branch_id FROM monthly_supplies_dispensed WHERE dispense_month = ?1{}
-         UNION SELECT clinic_id, area_id, branch_id FROM monthly_drugs_dispensed WHERE dispense_month = ?1{}
+         UNION SELECT clinic_id, area_id, branch_id FROM monthly_free_drugs_dispensed WHERE dispense_month = ?1{}
+         UNION SELECT clinic_id, area_id, branch_id FROM monthly_supported_drugs_dispensed WHERE dispense_month = ?1{}
          UNION SELECT clinic_id, area_id, branch_id FROM drug_groups WHERE dispense_month = ?1{}",
-        branch_filter, branch_filter, branch_filter, branch_filter, branch_filter, branch_filter, branch_filter,
+        branch_filter, branch_filter, branch_filter, branch_filter, branch_filter, branch_filter, branch_filter, branch_filter,
     );
 
     let count_sql = |cond: &str| -> i32 {
@@ -105,16 +107,32 @@ pub fn get_dashboard_summary(
     let jud_sql = format!("SELECT COUNT(*) FROM judicial_dispensed {}", where_clause);
     let judicial_count: i32 = conn.query_row(&jud_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0);
 
-    // 5. Authority Cost (Free authority + Supported authority value) — real
-    //    source is monthly_drugs_dispensed; flag when it holds no rows so the
-    //    UI can show "غير متاح" instead of a misleading 0.
-    let auth_exists_sql = format!("SELECT COUNT(*) FROM monthly_drugs_dispensed {}", where_clause);
+    // 5. Authority Cost (Free authority + Supported authority contribution),
+    //    from the two authoritative split tables only. The legacy combined
+    //    table is archive-only and must never contribute to totals.
+    //    Supported contribution is value − patient_share (matches the report
+    //    page org-share derivation). has_authority_data is true when ANY of the
+    //    two sources holds rows for the scope, so the UI shows "غير متاح"
+    //    only when there is genuinely no authority data.
+    let auth_exists_sql = format!(
+        "SELECT (
+            SELECT COUNT(*) > 0 FROM monthly_free_drugs_dispensed {}
+         ) OR (
+            SELECT COUNT(*) > 0 FROM monthly_supported_drugs_dispensed {}
+         )",
+        where_clause, where_clause
+    );
     let auth_rows: i32 = conn.query_row(&auth_exists_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0);
     let has_authority_data = auth_rows > 0;
 
     let auth_sql = format!(
-        "SELECT SUM(COALESCE(drugs_free_authority,0) + COALESCE(drugs_supported_authority_value,0)) FROM monthly_drugs_dispensed {}", 
-        where_clause
+        "SELECT COALESCE((
+            SELECT SUM(COALESCE(drugs_free_authority,0)) FROM monthly_free_drugs_dispensed {}
+         ), 0)
+         + COALESCE((
+            SELECT SUM(COALESCE(drugs_supported_authority_value,0) - COALESCE(drugs_supported_authority_patient_share,0)) FROM monthly_supported_drugs_dispensed {}
+         ), 0)",
+        where_clause, where_clause
     );
     let authority_cost: f64 = conn.query_row(&auth_sql, params_ref.as_slice(), |row| row.get(0)).unwrap_or(0.0);
 
@@ -315,7 +333,9 @@ pub fn get_missing_months(
                 ("SELECT (
                     SELECT COUNT(*) > 0 FROM detailed_drug_dispensed WHERE dispense_month = ?1 AND branch_id = ?2
                  ) OR (
-                    SELECT COUNT(*) > 0 FROM monthly_drugs_dispensed WHERE dispense_month = ?1 AND branch_id = ?2
+                    SELECT COUNT(*) > 0 FROM monthly_free_drugs_dispensed WHERE dispense_month = ?1 AND branch_id = ?2
+                 ) OR (
+                    SELECT COUNT(*) > 0 FROM monthly_supported_drugs_dispensed WHERE dispense_month = ?1 AND branch_id = ?2
                  ) OR (
                     SELECT COUNT(*) > 0 FROM insulin_dispensed WHERE dispense_month = ?1 AND branch_id = ?2
                  ) OR (
@@ -332,7 +352,9 @@ pub fn get_missing_months(
                 ("SELECT (
                     SELECT COUNT(*) > 0 FROM detailed_drug_dispensed WHERE dispense_month = ?1
                  ) OR (
-                    SELECT COUNT(*) > 0 FROM monthly_drugs_dispensed WHERE dispense_month = ?1
+                    SELECT COUNT(*) > 0 FROM monthly_free_drugs_dispensed WHERE dispense_month = ?1
+                 ) OR (
+                    SELECT COUNT(*) > 0 FROM monthly_supported_drugs_dispensed WHERE dispense_month = ?1
                  ) OR (
                     SELECT COUNT(*) > 0 FROM insulin_dispensed WHERE dispense_month = ?1
                  ) OR (

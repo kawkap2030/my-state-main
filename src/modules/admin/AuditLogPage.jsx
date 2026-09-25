@@ -20,7 +20,8 @@ const ACTION_LABELS = {
 };
 
 const TABLE_LABELS = {
-  monthly_drugs_dispensed: "إجماليات شهرية (أدوية)",
+  monthly_free_drugs_dispensed: "إجماليات شهرية (أدوية مجانية)",
+  monthly_supported_drugs_dispensed: "إجماليات شهرية (أدوية مدعمة)",
   monthly_supplies_dispensed: "إجماليات شهرية (مستلزمات)",
   detailed_drug_dispensed: "أدوية تفصيلية",
   medical_tickets: "تذاكر طبية",

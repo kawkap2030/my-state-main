@@ -236,7 +236,7 @@ const DashboardPage = () => {
   const handleExportYtd = async () => {
     if (!ytdData?.current && ytdData?.current !== 0) return;
     try {
-      const tables = ['detailed_drug_dispensed', 'monthly_drugs_dispensed', 'insulin_dispensed', 'monthly_supplies_dispensed', 'judicial_dispensed'];
+      const tables = ['detailed_drug_dispensed', 'monthly_free_drugs_dispensed', 'monthly_supported_drugs_dispensed', 'insulin_dispensed', 'monthly_supplies_dispensed', 'judicial_dispensed'];
       await invoke('export_to_excel', { tableNames: tables, customSavePath: null });
     } catch (err) {
       if (err !== 'CANCELLED' && !err?.includes('CANCELLED')) {

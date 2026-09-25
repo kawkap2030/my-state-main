@@ -31,7 +31,8 @@ const TABLE_ARABIC_NAMES = {
   judicial_medicines: 'أدوية الأحكام القضائية',
   judicial_patient_medicines: 'أدوية المرضى (الأحكام)',
   judicial_dispensed: 'منصرف الأحكام القضائية',
-  monthly_drugs_dispensed: 'منصرف الأدوية الشهري الإجمالي',
+  monthly_free_drugs_dispensed: 'المنصرف الشهري (أدوية مجانية)',
+  monthly_supported_drugs_dispensed: 'المنصرف الشهري (أدوية مدعمة)',
   supply_categories: 'تصنيفات المستلزمات',
   supplies: 'المستلزمات الطبية',
   monthly_supplies_dispensed: 'منصرف المستلزمات الشهري',
@@ -385,7 +386,7 @@ const DataManagementPage = () => {
     
     switch (clearPayload.clearType) {
       case 'dispensing_only':
-        tablesToExport = ['detailed_drug_dispensed', 'drug_groups', 'insulin_dispensed', 'judicial_dispensed', 'medical_tickets', 'monthly_drugs_dispensed', 'monthly_supplies_dispensed'];
+        tablesToExport = ['detailed_drug_dispensed', 'drug_groups', 'insulin_dispensed', 'judicial_dispensed', 'medical_tickets', 'monthly_free_drugs_dispensed', 'monthly_supported_drugs_dispensed', 'monthly_supplies_dispensed'];
         break;
       case 'all_data':
         tablesToExport = Object.keys(TABLE_ARABIC_NAMES);
@@ -395,7 +396,7 @@ const DataManagementPage = () => {
         break;
       case 'advanced':
         if (clearPayload.advancedType === 'categories') tablesToExport = ['detailed_drug_dispensed', 'drugs'];
-        else if (clearPayload.advancedType === 'clinics' || clearPayload.advancedType === 'date_range') tablesToExport = ['detailed_drug_dispensed', 'insulin_dispensed', 'judicial_dispensed', 'drug_groups', 'medical_tickets', 'monthly_drugs_dispensed', 'monthly_supplies_dispensed', 'judicial_patients'];
+        else if (clearPayload.advancedType === 'clinics' || clearPayload.advancedType === 'date_range') tablesToExport = ['detailed_drug_dispensed', 'insulin_dispensed', 'judicial_dispensed', 'drug_groups', 'medical_tickets', 'monthly_free_drugs_dispensed', 'monthly_supported_drugs_dispensed', 'monthly_supplies_dispensed', 'judicial_patients'];
         else if (clearPayload.advancedType === 'insulin_types') tablesToExport = ['insulin_dispensed'];
         break;
       default:

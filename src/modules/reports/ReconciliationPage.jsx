@@ -102,14 +102,27 @@ const ReconciliationPage = () => {
     if (type === 'excel') {
       const chain = buildHierarchyLabel(workspaceMode, hierarchyNames);
       const hierarchyLabel = [chain, `شهر: ${hierarchy.dispenseMonth}`].filter(Boolean).join(' | ');
-      
-      // Single-source rows (INFO) — every row the redesigned report returns
-      const infoRows = data.filter(r => r.status === 'INFO');
+      // Scope the export to the currently selected tab (matches the table and
+      // print preview, which both render filteredData).
+      const scopeData = (exportData && exportData.length > 0) ? exportData : filteredData;
+
+      // Single-source rows (INFO) — within the current tab scope
+      const infoRows = scopeData.filter(r => r.status === 'INFO');
+
+      // Same calculation rules as the on-screen stats, but scoped to the tab:
+      // the summary row is excluded (it already sums every source), and the
+      // tickets row is excluded from money (it carries a COUNT, not a value).
+      const scopeTicketsCount = scopeData
+        .filter(r => r.category === 'tickets')
+        .reduce((s, r) => s + (parseFloat(r.detailed_total) || 0), 0);
+      const scopeValue = scopeData
+        .filter(r => r.category !== 'summary' && r.category !== 'tickets')
+        .reduce((s, r) => s + (r.detailed_total || 0) + (r.monthly_total || 0), 0);
 
       // Sheet: Full Report
       const sheetsData = {
         'الإجماليات الموحدة': {
-          data: exportData,
+          data: scopeData,
           columns: [
             { header: "البند", accessor: "name" },
             { header: "التصنيف", accessor: (r) => CATEGORY_LABELS[r.category]?.label || r.category },
@@ -136,11 +149,11 @@ const ReconciliationPage = () => {
         summaryData: {
           headers: ['البند', 'القيمة'],
           rows: [
-            ['إجمالي البنود', data.length.toString()],
-            ['مصادر منفردة', stats.info.toString()],
-            ['فئات قابلة للتوسيع', stats.expandable.toString()],
-            ['إجمالي عدد التذاكر', Math.round(stats.ticketsCount).toString()],
-            ['إجمالي القيمة', stats.totalValue.toLocaleString(undefined, { maximumFractionDigits: 2 })],
+            ['إجمالي البنود', scopeData.length.toString()],
+            ['مصادر منفردة', infoRows.length.toString()],
+            ['فئات قابلة للتوسيع', scopeData.filter(r => r.category_name).length.toString()],
+            ['إجمالي عدد التذاكر', Math.round(scopeTicketsCount).toString()],
+            ['إجمالي القيمة', scopeValue.toLocaleString(undefined, { maximumFractionDigits: 2 })],
           ]
         }
       });
@@ -277,7 +290,7 @@ const ReconciliationPage = () => {
             معاينة الطباعة
           </Button>
           <ExportMenu 
-            data={data} 
+            data={filteredData}
             columns={exportColumns} 
             options={{ 
               title: 'تقرير الإجماليات الموحدة', 

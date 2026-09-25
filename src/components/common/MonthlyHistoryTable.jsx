@@ -35,7 +35,7 @@ const formatNumber = (num) => {
 };
 
 
-const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh }) => {
+const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh, hideDirectPrint = false }) => {
   const { activeHierarchy, checkIsMonthLocked } = useGlobalApp();
   const toast = useToast();
   const [records, setRecords] = useState([]);
@@ -118,12 +118,103 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh }) => {
 
       setSupplyCategories(scList);
 
-      // 2. Fetch Records (Use unlimited report commands)
-      const command = mode === 'supplies' ? 'get_report_monthly_supplies_dispensed' : 'get_report_monthly_drugs_dispensed';
-      const results = await invoke(command, { 
-        branchId: null, areaId: null, clinicId: null, dispenseMonth: null 
-      });
-      setRecords(results);
+      // 2. Fetch Records (Unlimited report commands; free/supported read their own split tables)
+      if (mode === 'supplies') {
+        const results = await invoke('get_report_monthly_supplies_dispensed', {
+          branchId: null, areaId: null, clinicId: null, dispenseMonth: null
+        });
+        setRecords(results);
+        return;
+      }
+
+      const [freeResults, supportedResults] = await Promise.all([
+        invoke('get_report_free_monthly_drugs_dispensed', { branchId: null, areaId: null, clinicId: null, dispenseMonth: null }),
+        invoke('get_report_supported_monthly_drugs_dispensed', { branchId: null, areaId: null, clinicId: null, dispenseMonth: null }),
+      ]);
+
+      // Type-aware display: a page only shows records that actually contain data
+      // of its own type. A row created only with Free data must not appear in the
+      // Supported history, and vice versa (no fake zero-value records).
+      const freeFiltered = freeResults.filter((r) =>
+        (r.drugs_free_authority || 0) + (r.drugs_free_students || 0) +
+        (r.drugs_free_infants || 0) + (r.drugs_free_breadwinner_women || 0) > 0
+      );
+      const supportedFiltered = supportedResults.filter((r) =>
+        (r.drugs_supported_authority_value || 0) + (r.drugs_supported_students_value || 0) +
+        (r.drugs_supported_infants_value || 0) > 0
+      );
+
+      let typeFiltered;
+      if (mode === 'free') {
+        typeFiltered = freeFiltered;
+      } else if (mode === 'supported') {
+        typeFiltered = supportedFiltered;
+      } else {
+        // 'all': combine both split tables by logical key
+        // (branch + area + clinic + month). A merged row keeps the id of each
+        // side so deletion removes both tables.
+        const keyOf = (r) => `${r.branch_id}|${r.area_id || 0}|${r.clinic_id || 0}|${r.dispense_month}`;
+        const merged = new Map();
+        for (const r of freeFiltered) {
+          merged.set(keyOf(r), {
+            id: `f${r.id}`,
+            freeId: r.id,
+            supId: null,
+            branch_id: r.branch_id,
+            area_id: r.area_id,
+            clinic_id: r.clinic_id,
+            dispense_month: r.dispense_month,
+            notes: r.notes,
+            drugs_free_authority: r.drugs_free_authority,
+            drugs_free_students: r.drugs_free_students,
+            drugs_free_infants: r.drugs_free_infants,
+            drugs_free_breadwinner_women: r.drugs_free_breadwinner_women,
+            drugs_supported_authority_value: 0,
+            drugs_supported_authority_patient_share: 0,
+            drugs_supported_students_value: 0,
+            drugs_supported_students_patient_share: 0,
+            drugs_supported_infants_value: 0,
+            drugs_supported_infants_patient_share: 0,
+          });
+        }
+        for (const r of supportedFiltered) {
+          const k = keyOf(r);
+          const existing = merged.get(k);
+          if (existing) {
+            existing.supId = r.id;
+            existing.drugs_supported_authority_value = r.drugs_supported_authority_value;
+            existing.drugs_supported_authority_patient_share = r.drugs_supported_authority_patient_share;
+            existing.drugs_supported_students_value = r.drugs_supported_students_value;
+            existing.drugs_supported_students_patient_share = r.drugs_supported_students_patient_share;
+            existing.drugs_supported_infants_value = r.drugs_supported_infants_value;
+            existing.drugs_supported_infants_patient_share = r.drugs_supported_infants_patient_share;
+            existing.notes = existing.notes || r.notes;
+          } else {
+            merged.set(k, {
+              id: `s${r.id}`,
+              freeId: null,
+              supId: r.id,
+              branch_id: r.branch_id,
+              area_id: r.area_id,
+              clinic_id: r.clinic_id,
+              dispense_month: r.dispense_month,
+              notes: r.notes,
+              drugs_free_authority: 0,
+              drugs_free_students: 0,
+              drugs_free_infants: 0,
+              drugs_free_breadwinner_women: 0,
+              drugs_supported_authority_value: r.drugs_supported_authority_value,
+              drugs_supported_authority_patient_share: r.drugs_supported_authority_patient_share,
+              drugs_supported_students_value: r.drugs_supported_students_value,
+              drugs_supported_students_patient_share: r.drugs_supported_students_patient_share,
+              drugs_supported_infants_value: r.drugs_supported_infants_value,
+              drugs_supported_infants_patient_share: r.drugs_supported_infants_patient_share,
+            });
+          }
+        }
+        typeFiltered = [...merged.values()];
+      }
+      setRecords(typeFiltered);
     } catch (error) {
       console.error("Failed to fetch history:", error);
     } finally {
@@ -139,8 +230,17 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh }) => {
     if (!deleteTarget) return;
     setDeleteLoading(true);
     try {
-      const command = mode === 'supplies' ? 'delete_monthly_supplies_dispensed' : 'delete_monthly_drugs_dispensed';
-      await invoke(command, { id: deleteTarget.id });
+      if (mode === 'supplies') {
+        await invoke('delete_monthly_supplies_dispensed', { id: deleteTarget.id });
+      } else if (mode === 'free') {
+        await invoke('delete_free_monthly_drugs_dispensed', { id: deleteTarget.id });
+      } else if (mode === 'supported') {
+        await invoke('delete_supported_monthly_drugs_dispensed', { id: deleteTarget.id });
+      } else {
+        // 'all': combined rows are deleted from both split tables.
+        if (deleteTarget.freeId) await invoke('delete_free_monthly_drugs_dispensed', { id: deleteTarget.freeId });
+        if (deleteTarget.supId) await invoke('delete_supported_monthly_drugs_dispensed', { id: deleteTarget.supId });
+      }
       toast.success('تم حذف السجل بنجاح');
       fetchData();
     } catch (error) {
@@ -187,6 +287,13 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh }) => {
         students_share: data.reduce((s, r) => s + (r.drugs_supported_students_patient_share || 0), 0),
         infants: data.reduce((s, r) => s + (r.drugs_supported_infants_value || 0), 0),
         infants_share: data.reduce((s, r) => s + (r.drugs_supported_infants_patient_share || 0), 0),
+      };
+    } else if (mode === 'all') {
+      return {
+        count: data.length,
+        freeTotal: data.reduce((s, r) => s + (r.drugs_free_authority || 0) + (r.drugs_free_students || 0) + (r.drugs_free_infants || 0) + (r.drugs_free_breadwinner_women || 0), 0),
+        supportedValue: data.reduce((s, r) => s + (r.drugs_supported_authority_value || 0) + (r.drugs_supported_students_value || 0) + (r.drugs_supported_infants_value || 0), 0),
+        patientShare: data.reduce((s, r) => s + (r.drugs_supported_authority_patient_share || 0) + (r.drugs_supported_students_patient_share || 0) + (r.drugs_supported_infants_patient_share || 0), 0),
       };
     } else {
       return {
@@ -409,9 +516,11 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh }) => {
   };
 
   // ─── Keyboard Shortcuts ───
-  useKeyboardShortcuts([
-    { key: 'p', ctrl: true, handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }), description: 'طباعة' },
-  ]);
+  useKeyboardShortcuts(
+    hideDirectPrint ? [] : [
+      { key: 'p', ctrl: true, handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }), description: 'طباعة' },
+    ]
+  );
 
   if (loading) return (
     <div className="flex items-center justify-center p-20">
@@ -685,6 +794,7 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh }) => {
               >
                 <RefreshCw size={14} /> تحديث
               </button>
+              {!hideDirectPrint && (
               <button 
                 onClick={() => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true })} 
                 className="px-4 py-2 rounded-xl border border-[var(--color-border)] text-sm font-bold bg-[var(--color-bg-card)] text-[var(--color-text)] hover:bg-[var(--color-primary)] hover:text-white transition-all flex items-center gap-1"
@@ -692,8 +802,9 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh }) => {
               >
                 <Printer size={14} /> طباعة
               </button>
+              )}
               <ExportMenu 
-                data={records} 
+                data={filteredRecords} 
                 columns={exportColumns} 
                 options={{ 
                   title: mode === 'supported' ? 'سجلات صرف الأدوية المدعمة' : mode === 'free' ? 'سجلات صرف الأدوية المجانية' : 'سجلات صرف المستلزمات',

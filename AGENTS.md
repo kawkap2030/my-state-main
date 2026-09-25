@@ -154,3 +154,22 @@ Phase 1 stabilization:
 - Insulin save/filter/all-mode issues fixed.
 - Functional testing remains in progress.
 
+Phase 5 (legacy monthly_drugs_dispensed FINAL PURGE):
+- Removed the legacy `monthly_drugs_dispensed` table and `v_monthly_drugs_merged` view
+  from the final schema. The only monthly drug-dispensing tables are now
+  `monthly_free_drugs_dispensed` and `monthly_supported_drugs_dispensed`.
+- db.rs now guarantees the split tables + unique indexes on every launch and drops
+  the legacy table/view idempotently (no migration, no archive, no fallback).
+- Removed the 5 legacy Rust commands and struct from monthly_dispensed.rs
+  (save/get/get_all/get_report/delete) and their lib.rs registrations;
+  reports read the two split tables via an inline UNION ALL subquery (no view).
+- Backend references cleaned: admin.rs lists, clinic counts, clear-data deletes,
+  CSV/Excel exports, and backup required_tables now use the final schema; legacy
+  backups are rejected as incompatible during restore validation.
+- Frontend cleaned: MonthlyDispensedForm/BranchMonthlyGridEntry/MonthlyHistoryTable
+  use the split commands; DataManagementPage and AuditLogPage table labels updated;
+  tauriApi.js mock layer uses the split commands only.
+- Tests: 37/37 Rust lib tests green (test_14 is now a legacy-absence test),
+  71/71 Vitest, ESLint clean, production build green. Live DB (medicine_dispenser.db)
+  verified: legacy table dropped, split tables + unique indexes intact.
+

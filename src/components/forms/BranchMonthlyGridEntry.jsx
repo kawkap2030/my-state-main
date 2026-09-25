@@ -45,30 +45,44 @@ const BranchMonthlyGridEntry = ({ branchId, dispenseMonth }) => {
         }
       }
 
-      // Fetch existing data
-      const existingData = await invoke('get_all_monthly_drugs_dispensed', {
-        branchId: parseInt(branchId),
-        dispenseMonth
-      });
+      // Fetch existing data from BOTH split tables (no combined table).
+      const [freeData, supportedData] = await Promise.all([
+        invoke('get_all_free_monthly_drugs_dispensed', {
+          branchId: parseInt(branchId),
+          areaId: null,
+          clinicId: null,
+          dispenseMonth
+        }),
+        invoke('get_all_supported_monthly_drugs_dispensed', {
+          branchId: parseInt(branchId),
+          areaId: null,
+          clinicId: null,
+          dispenseMonth
+        }),
+      ]);
+
+      const keyOf = (d) => `${d.area_id || 0}|${d.clinic_id || 0}`;
+      const freeByKey = new Map(freeData.map((d) => [keyOf(d), d]));
+      const supportedByKey = new Map(supportedData.map((d) => [keyOf(d), d]));
 
       // Merge
       const gridRows = allEntities.map(entity => {
-        const existing = existingData.find(d => 
-          d.area_id === entity.area_id && d.clinic_id === entity.clinic_id
-        );
+        const f = freeByKey.get(keyOf(entity));
+        const s = supportedByKey.get(keyOf(entity));
         return {
           ...entity,
-          recordId: existing?.id || null,
-          drugs_free_authority: existing?.drugs_free_authority || 0,
-          drugs_free_students: existing?.drugs_free_students || 0,
-          drugs_free_infants: existing?.drugs_free_infants || 0,
-          drugs_free_breadwinner_women: existing?.drugs_free_breadwinner_women || 0,
-          drugs_supported_authority_value: existing?.drugs_supported_authority_value || 0,
-          drugs_supported_authority_patient_share: existing?.drugs_supported_authority_patient_share || 0,
-          drugs_supported_students_value: existing?.drugs_supported_students_value || 0,
-          drugs_supported_students_patient_share: existing?.drugs_supported_students_patient_share || 0,
-          drugs_supported_infants_value: existing?.drugs_supported_infants_value || 0,
-          drugs_supported_infants_patient_share: existing?.drugs_supported_infants_patient_share || 0,
+          freeRecordId: f?.id || null,
+          supportedRecordId: s?.id || null,
+          drugs_free_authority: f?.drugs_free_authority || 0,
+          drugs_free_students: f?.drugs_free_students || 0,
+          drugs_free_infants: f?.drugs_free_infants || 0,
+          drugs_free_breadwinner_women: f?.drugs_free_breadwinner_women || 0,
+          drugs_supported_authority_value: s?.drugs_supported_authority_value || 0,
+          drugs_supported_authority_patient_share: s?.drugs_supported_authority_patient_share || 0,
+          drugs_supported_students_value: s?.drugs_supported_students_value || 0,
+          drugs_supported_students_patient_share: s?.drugs_supported_students_patient_share || 0,
+          drugs_supported_infants_value: s?.drugs_supported_infants_value || 0,
+          drugs_supported_infants_patient_share: s?.drugs_supported_infants_patient_share || 0,
         };
       });
 
@@ -94,49 +108,88 @@ const BranchMonthlyGridEntry = ({ branchId, dispenseMonth }) => {
   const handleSaveAll = async () => {
     setSaving(true);
     let successCount = 0;
+    const errors = [];
+
+    // Free and Supported are two INDEPENDENT tables, and each row is treated
+    // independently too: a failure of one type (or one row) is collected and
+    // reported WITHOUT aborting the remaining rows/types.
     try {
       for (const row of data) {
-        // Skip if all values are 0 and no record exists
-        const sum = (parseFloat(row.drugs_free_authority) || 0) + (parseFloat(row.drugs_free_students) || 0) + (parseFloat(row.drugs_free_infants) || 0) + 
-                   (parseFloat(row.drugs_free_breadwinner_women) || 0) + (parseFloat(row.drugs_supported_authority_value) || 0) + 
-                   (parseFloat(row.drugs_supported_authority_patient_share) || 0) + (parseFloat(row.drugs_supported_students_value) || 0) + 
-                   (parseFloat(row.drugs_supported_students_patient_share) || 0) + (parseFloat(row.drugs_supported_infants_value) || 0) + 
-                   (parseFloat(row.drugs_supported_infants_patient_share) || 0);
-        
-        if (sum === 0 && !row.recordId) continue;
+        // Skip if all values are 0 and no record exists on either side
+        const freeSum = (parseFloat(row.drugs_free_authority) || 0) + (parseFloat(row.drugs_free_students) || 0) + (parseFloat(row.drugs_free_infants) || 0) + (parseFloat(row.drugs_free_breadwinner_women) || 0);
+        const supSum = (parseFloat(row.drugs_supported_authority_value) || 0) + (parseFloat(row.drugs_supported_authority_patient_share) || 0) + (parseFloat(row.drugs_supported_students_value) || 0) + (parseFloat(row.drugs_supported_students_patient_share) || 0) + (parseFloat(row.drugs_supported_infants_value) || 0) + (parseFloat(row.drugs_supported_infants_patient_share) || 0);
 
-        const payload = {
-          id: row.recordId,
-          clinic_id: row.clinic_id,
-          area_id: row.area_id,
-          branch_id: parseInt(row.branch_id),
-          dispense_month: dispenseMonth,
-          drugs_free_authority: parseFloat(row.drugs_free_authority) || 0,
-          drugs_free_students: parseFloat(row.drugs_free_students) || 0,
-          drugs_free_infants: parseFloat(row.drugs_free_infants) || 0,
-          drugs_free_breadwinner_women: parseFloat(row.drugs_free_breadwinner_women) || 0,
-          drugs_supported_authority_value: parseFloat(row.drugs_supported_authority_value) || 0,
-          drugs_supported_authority_patient_share: parseFloat(row.drugs_supported_authority_patient_share) || 0,
-          drugs_supported_students_value: parseFloat(row.drugs_supported_students_value) || 0,
-          drugs_supported_students_patient_share: parseFloat(row.drugs_supported_students_patient_share) || 0,
-          drugs_supported_infants_value: parseFloat(row.drugs_supported_infants_value) || 0,
-          drugs_supported_infants_patient_share: parseFloat(row.drugs_supported_infants_patient_share) || 0,
-          notes: ''
-        };
+        if (freeSum === 0 && supSum === 0 && !row.freeRecordId && !row.supportedRecordId) continue;
 
-        await invoke('save_monthly_drugs_dispensed', { data: payload });
-        successCount++;
+        if (freeSum > 0 || row.freeRecordId) {
+          const freePayload = {
+            clinic_id: row.clinic_id,
+            area_id: row.area_id,
+            branch_id: parseInt(row.branch_id),
+            dispense_month: dispenseMonth,
+            drugs_free_authority: parseFloat(row.drugs_free_authority) || 0,
+            drugs_free_students: parseFloat(row.drugs_free_students) || 0,
+            drugs_free_infants: parseFloat(row.drugs_free_infants) || 0,
+            drugs_free_breadwinner_women: parseFloat(row.drugs_free_breadwinner_women) || 0,
+            notes: ''
+          };
+          // Existing row => explicit Update; otherwise strict Create (rejected if the key exists).
+          if (row.freeRecordId) freePayload.id = row.freeRecordId;
+          try {
+            await invoke('save_free_monthly_drugs_dispensed', {
+              data: freePayload,
+              isCreate: !row.freeRecordId,
+            });
+            successCount++;
+          } catch (err) {
+            errors.push(`مجاني - ${row.name}: ${err}`);
+          }
+        }
+
+        if (supSum > 0 || row.supportedRecordId) {
+          const supportedPayload = {
+            clinic_id: row.clinic_id,
+            area_id: row.area_id,
+            branch_id: parseInt(row.branch_id),
+            dispense_month: dispenseMonth,
+            drugs_supported_authority_value: parseFloat(row.drugs_supported_authority_value) || 0,
+            drugs_supported_authority_patient_share: parseFloat(row.drugs_supported_authority_patient_share) || 0,
+            drugs_supported_students_value: parseFloat(row.drugs_supported_students_value) || 0,
+            drugs_supported_students_patient_share: parseFloat(row.drugs_supported_students_patient_share) || 0,
+            drugs_supported_infants_value: parseFloat(row.drugs_supported_infants_value) || 0,
+            drugs_supported_infants_patient_share: parseFloat(row.drugs_supported_infants_patient_share) || 0,
+            notes: ''
+          };
+          // Existing row => explicit Update; otherwise strict Create (rejected if the key exists).
+          if (row.supportedRecordId) supportedPayload.id = row.supportedRecordId;
+          try {
+            await invoke('save_supported_monthly_drugs_dispensed', {
+              data: supportedPayload,
+              isCreate: !row.supportedRecordId,
+            });
+            successCount++;
+          } catch (err) {
+            errors.push(`مدعم - ${row.name}: ${err}`);
+          }
+        }
       }
 
       await invoke('log_frontend_action', {
         userId: user ? user.id : null,
         action: 'BULK_UPDATE',
-        tableName: 'monthly_drugs_dispensed',
+        tableName: 'monthly_free_drugs_dispensed',
         recordId: null,
-        details: `تم حفظ ${successCount} سجلات من الإدخال الشبكي لفرع ${branchId}`
+        details: `تم حفظ ${successCount} سجلات من الإدخال الشبكي (مجاني + مدعم) لفرع ${branchId}`
       });
 
-      toast.success(`تم حفظ ${successCount} سجلات بنجاح`);
+      if (errors.length === 0) {
+        toast.success(`تم حفظ ${successCount} سجلات بنجاح`);
+      } else if (successCount > 0) {
+        toast.success(`تم حفظ ${successCount} سجلات، مع فشل أخرى: ${errors[0]}`);
+      } else {
+        toast.error(`فشل الحفظ: ${errors[0]}`);
+        errors.slice(1).forEach((err) => toast.error(err));
+      }
       await loadGridData();
     } catch (err) {
       toast.error(`حدث خطأ أثناء الحفظ: ${err}`);
@@ -165,16 +218,16 @@ const BranchMonthlyGridEntry = ({ branchId, dispenseMonth }) => {
           <thead className="bg-[var(--color-bg-card)] text-[var(--color-text-muted)] sticky top-0 z-10 font-black">
             <tr>
               <th className="p-3 border-b border-[var(--color-border)] min-w-[150px]">الجهة</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50">هيئة (مجاني)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50">طلاب (مجاني)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50">رضع (مجاني)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-blue-50/50">مرأة (مجاني)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">هيئة (مدعم - قيمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">هيئة (مدعم - مساهمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">طلاب (مدعم - قيمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">طلاب (مدعم - مساهمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">رضع (مدعم - قيمة)</th>
-              <th className="p-3 border-b border-[var(--color-border)] bg-emerald-50/50">رضع (مدعم - مساهمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-cyan-bg)]">هيئة (مجاني)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-cyan-bg)]">طلاب (مجاني)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-cyan-bg)]">رضع (مجاني)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-cyan-bg)]">مرأة (مجاني)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-emerald-bg)]">هيئة (مدعم - قيمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-emerald-bg)]">هيئة (مدعم - مساهمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-emerald-bg)]">طلاب (مدعم - قيمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-emerald-bg)]">طلاب (مدعم - مساهمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-emerald-bg)]">رضع (مدعم - قيمة)</th>
+              <th className="p-3 border-b border-[var(--color-border)] bg-[var(--color-accent-emerald-bg)]">رضع (مدعم - مساهمة)</th>
             </tr>
           </thead>
           <tbody className="bg-[var(--color-bg)]">
@@ -185,34 +238,34 @@ const BranchMonthlyGridEntry = ({ branchId, dispenseMonth }) => {
                   {row.name}
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_free_authority} onChange={e => handleInputChange(idx, 'drugs_free_authority', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_free_authority} onChange={e => handleInputChange(idx, 'drugs_free_authority', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_free_students} onChange={e => handleInputChange(idx, 'drugs_free_students', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_free_students} onChange={e => handleInputChange(idx, 'drugs_free_students', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_free_infants} onChange={e => handleInputChange(idx, 'drugs_free_infants', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_free_infants} onChange={e => handleInputChange(idx, 'drugs_free_infants', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_free_breadwinner_women} onChange={e => handleInputChange(idx, 'drugs_free_breadwinner_women', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_free_breadwinner_women} onChange={e => handleInputChange(idx, 'drugs_free_breadwinner_women', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_supported_authority_value} onChange={e => handleInputChange(idx, 'drugs_supported_authority_value', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_supported_authority_value} onChange={e => handleInputChange(idx, 'drugs_supported_authority_value', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_supported_authority_patient_share} onChange={e => handleInputChange(idx, 'drugs_supported_authority_patient_share', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_supported_authority_patient_share} onChange={e => handleInputChange(idx, 'drugs_supported_authority_patient_share', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_supported_students_value} onChange={e => handleInputChange(idx, 'drugs_supported_students_value', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_supported_students_value} onChange={e => handleInputChange(idx, 'drugs_supported_students_value', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_supported_students_patient_share} onChange={e => handleInputChange(idx, 'drugs_supported_students_patient_share', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_supported_students_patient_share} onChange={e => handleInputChange(idx, 'drugs_supported_students_patient_share', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_supported_infants_value} onChange={e => handleInputChange(idx, 'drugs_supported_infants_value', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_supported_infants_value} onChange={e => handleInputChange(idx, 'drugs_supported_infants_value', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
                 <td className="p-1">
-                  <input type="number" value={row.drugs_supported_infants_patient_share} onChange={e => handleInputChange(idx, 'drugs_supported_infants_patient_share', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent focus:bg-white" />
+                  <input type="number" value={row.drugs_supported_infants_patient_share} onChange={e => handleInputChange(idx, 'drugs_supported_infants_patient_share', e.target.value)} className="w-full p-2 border border-[var(--color-border)] rounded bg-transparent text-[var(--color-text)] focus:bg-[var(--color-bg-card)]" />
                 </td>
               </tr>
             ))}

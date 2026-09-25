@@ -53,7 +53,6 @@ const MedicalTicketsPage = lazyWithPreload(() => import('../modules/transactions
 const InsulinDispensingPage = lazyWithPreload(() => import('../modules/transactions/insulin-dispensing/InsulinDispensingPage'));
 const JudicialDispensingPage = lazyWithPreload(() => import('../modules/transactions/judicial-dispensing/JudicialDispensingPage'));
 const GroupCostsPage = lazyWithPreload(() => import('../modules/transactions/group-costs/GroupCostsPage'));
-const BranchBatchSummaryPage = lazyWithPreload(() => import('../modules/transactions/BranchBatchSummaryPage'));
 const QuickTicketsPage = lazyWithPreload(() => import('../modules/transactions/QuickTicketsPage'));
 
 // Reports — General
@@ -138,7 +137,6 @@ const router = createHashRouter([
       { path: 'transactions/insulin-dispensing', element: <Suspensed><RoleGuard requiredRole="data_entry"><InsulinDispensingPage /></RoleGuard></Suspensed> },
       { path: 'transactions/judicial-dispensing', element: <Suspensed><RoleGuard requiredRole="data_entry"><JudicialDispensingPage /></RoleGuard></Suspensed> },
       { path: 'transactions/group-costs', element: <Suspensed><RoleGuard requiredRole="data_entry"><GroupCostsPage /></RoleGuard></Suspensed> },
-      { path: 'transactions/branch-batch-summary', element: <Suspensed><RoleGuard requiredRole="data_entry"><BranchBatchSummaryPage /></RoleGuard></Suspensed> },
       { path: 'transactions/quick-tickets', element: <Suspensed><RoleGuard requiredRole="data_entry"><QuickTicketsPage /></RoleGuard></Suspensed> },
 
       // ── Reporting Layer ────────────────────────────────────────────────

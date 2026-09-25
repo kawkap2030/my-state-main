@@ -826,8 +826,6 @@ function mockData(cmd, args) {
       }
 
     // Save operations
-    case "save_branch_batch_summary":
-      return { saved: args.items?.length || 0, skipped: 0, skipped_branches: [] };
     // Tickets Batch Commands — mirrors the backend isolation-aware logic:
     // level 'branches' → one row per branch (branchIds empty = ALL branches);
     // level 'areas'    → one row per area (areaIds empty = all areas of the
@@ -898,31 +896,26 @@ function mockData(cmd, args) {
     case "save_tickets_batch_bulk":
       return { saved: (args.items || []).length, skipped: 0 };
 
-    case "get_branch_batch_summary":
-      {
-        const month = args.dispenseMonth;
-        return mockBranches.map(b => ({
-          id: 0,
-          branch_id: b.id,
-          branch_name: b.name,
-          dispense_month: month,
-          drugs_free_authority: 0,
-          drugs_free_students: 0,
-          drugs_free_infants: 0,
-          drugs_free_breadwinner_women: 0,
-          drugs_supported_authority_value: 0,
-          drugs_supported_authority_patient_share: 0,
-          drugs_supported_students_value: 0,
-          drugs_supported_students_patient_share: 0,
-          drugs_supported_infants_value: 0,
-          drugs_supported_infants_patient_share: 0,
-        }));
-      }
-
-    case "save_monthly_drugs_dispensed":
-      return { success: true, id: ++nextId };
-    case "get_monthly_drugs_dispensed":
+    // PHASE 5: Split Free / Supported monthly commands only (browser-mode mocks).
+    // The legacy combined monthly_drugs_dispensed commands were removed.
+    case "save_free_monthly_drugs_dispensed":
+    case "save_supported_monthly_drugs_dispensed":
+      return ++nextId;
+    case "get_free_monthly_drugs_dispensed":
+    case "get_supported_monthly_drugs_dispensed":
       return null;
+    case "get_all_free_monthly_drugs_dispensed":
+    case "get_all_supported_monthly_drugs_dispensed":
+    case "get_report_free_monthly_drugs_dispensed":
+    case "get_report_supported_monthly_drugs_dispensed":
+      return [];
+    case "delete_free_monthly_drugs_dispensed":
+    case "delete_supported_monthly_drugs_dispensed":
+      return { success: true };
+    // PHASE 4: Split monthly range reads (temporal hub) — empty in browser mocks.
+    case "get_free_monthly_drugs_dispensed_range":
+    case "get_supported_monthly_drugs_dispensed_range":
+      return [];
     case "save_detailed_drug_dispensed":
       return ++nextId;
     case "get_detailed_drug_dispensed":

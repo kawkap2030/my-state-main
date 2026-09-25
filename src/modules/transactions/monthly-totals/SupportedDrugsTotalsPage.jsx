@@ -16,6 +16,7 @@ import {
   ToggleLeft,
   ToggleRight,
   Lock,
+  Info,
 } from "lucide-react";
 import Card from "../../../components/ui/Card";
 import { useToast } from "../../../components/ui/Toast";
@@ -51,6 +52,10 @@ const SupportedDrugsTotalsPage = () => {
   });
   const { isLocked: monthLocked, LockBanner } = useLockGuard(hierarchy?.dispenseMonth);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editRecord, setEditRecord] = useState(null);
+  const editRecordRef = React.useRef(editRecord);
+  React.useEffect(() => { editRecordRef.current = editRecord; });
 
   const handleEditRecord = (record) => {
     setHierarchy({
@@ -60,6 +65,9 @@ const SupportedDrugsTotalsPage = () => {
       clinicId: record.clinic_id?.toString() || "",
       dispenseMonth: record.dispense_month || "",
     });
+    setSupportedRecordId(record.id);
+    setEditRecord(record);
+    setIsEditing(true);
     setFormData({
       drugs_supported_authority_value: record.drugs_supported_authority_value || 0,
       drugs_supported_authority_patient_share: record.drugs_supported_authority_patient_share || 0,
@@ -69,7 +77,6 @@ const SupportedDrugsTotalsPage = () => {
       drugs_supported_infants_patient_share: record.drugs_supported_infants_patient_share || 0,
       notes: record.notes || "",
     });
-    setCurrentId(record.id);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -80,11 +87,14 @@ const SupportedDrugsTotalsPage = () => {
       areaId: "",
       clinicId: "",
     }));
+    setSupportedRecordId(null);
+    setEditRecord(null);
+    setIsEditing(false);
   };
 
-  const [currentId, setCurrentId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [supportedRecordId, setSupportedRecordId] = useState(null);
   const [formData, setFormData] = useState({
     drugs_supported_authority_value: 0,
     drugs_supported_authority_patient_share: 0,
@@ -97,6 +107,7 @@ const SupportedDrugsTotalsPage = () => {
 
   // Fetch existing data when hierarchy changes
   const fetchData = useCallback(async () => {
+    setSupportedRecordId(null);
     if (!hierarchy?.branchId || !hierarchy?.dispenseMonth) {
       setFormData({
         drugs_supported_authority_value: 0,
@@ -107,7 +118,6 @@ const SupportedDrugsTotalsPage = () => {
         drugs_supported_infants_patient_share: 0,
         notes: "",
       });
-      setCurrentId(null);
       return;
     }
 
@@ -122,7 +132,6 @@ const SupportedDrugsTotalsPage = () => {
         drugs_supported_infants_patient_share: 0,
         notes: "",
       });
-      setCurrentId(null);
       return;
     }
     if (hierarchy.level === "clinic" && !hierarchy.clinicId) {
@@ -135,23 +144,34 @@ const SupportedDrugsTotalsPage = () => {
         drugs_supported_infants_patient_share: 0,
         notes: "",
       });
-      setCurrentId(null);
       return;
     }
 
     setLoading(true);
     try {
-      const data = await invoke("get_monthly_drugs_dispensed", {
+      // Confirm the selected key exists and remember its id so the form knows
+      // whether the next save is a strict Create or an explicit Update.
+      const existing = await invoke("get_supported_monthly_drugs_dispensed", {
         branchId: parseInt(hierarchy.branchId),
         areaId: hierarchy.areaId ? parseInt(hierarchy.areaId) : null,
         clinicId: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,
         dispenseMonth: hierarchy.dispenseMonth,
       });
-      if (data) {
-        // Only set the ID, don't populate the form automatically to avoid confusion when browsing
-        setCurrentId(data.id);
-      } else {
-        setCurrentId(null);
+      setSupportedRecordId(existing?.id ?? null);
+      // Display-for-review only: fill the fields with the stored values while
+      // STAYING in Create Mode (saving remains a strict Create → the backend
+      // rejects duplicates). During an explicit Edit we must NOT clobber the
+      // user's in-progress changes with a late async fetch.
+      if (existing && !editRecordRef.current) {
+        setFormData({
+          drugs_supported_authority_value: existing.drugs_supported_authority_value || 0,
+          drugs_supported_authority_patient_share: existing.drugs_supported_authority_patient_share || 0,
+          drugs_supported_students_value: existing.drugs_supported_students_value || 0,
+          drugs_supported_students_patient_share: existing.drugs_supported_students_patient_share || 0,
+          drugs_supported_infants_value: existing.drugs_supported_infants_value || 0,
+          drugs_supported_infants_patient_share: existing.drugs_supported_infants_patient_share || 0,
+          notes: existing.notes || "",
+        });
       }
     } catch (e) {
       console.error(e);
@@ -171,6 +191,29 @@ const SupportedDrugsTotalsPage = () => {
   React.useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Selecting a different entity/month resets the form back to Create Mode.
+  // Only an active editRecord (user pressed "تعديل") keeps Update Mode, so
+  // selecting an entity merely shows data for review while saving stays a
+  // strict Create (duplicate-protected by the backend).
+  React.useEffect(() => {
+    if (editRecord) return;
+    setIsEditing(false);
+  }, [
+    hierarchy?.branchId,
+    hierarchy?.areaId,
+    hierarchy?.clinicId,
+    hierarchy?.dispenseMonth,
+    editRecord,
+  ]);
+
+  React.useEffect(() => {
+    if (editRecord) {
+      setIsEditing(true);
+    } else {
+      setIsEditing(false);
+    }
+  }, [editRecord]);
 
   const handleChange = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -210,21 +253,50 @@ const SupportedDrugsTotalsPage = () => {
       return;
     }
 
+    // Validate supported categories: patient share must not exceed total value.
+    const supportedCategories = [
+      {
+        label: "الهيئة",
+        valueName: "drugs_supported_authority_value",
+        shareName: "drugs_supported_authority_patient_share",
+      },
+      {
+        label: "الطلاب",
+        valueName: "drugs_supported_students_value",
+        shareName: "drugs_supported_students_patient_share",
+      },
+      {
+        label: "الرضع",
+        valueName: "drugs_supported_infants_value",
+        shareName: "drugs_supported_infants_patient_share",
+      },
+    ];
+    for (const { label, valueName, shareName } of supportedCategories) {
+      const value = parseFloat(formData[valueName]) || 0;
+      const share = parseFloat(formData[shareName]) || 0;
+      if (share > value) {
+        toast.error(
+          `قيمة ما يتحمله المريض في فئة (${label}) أكبر من قيمة المنصرف. يجب أن تكون حصة المريض أقل من أو تساوي قيمة المنصرف.`
+        );
+        return;
+      }
+    }
+
     setSaving(true);
     try {
-      await invoke("save_monthly_drugs_dispensed", {
+      // Strict create/update separation: an explicit Update requires Update
+      // Mode + a loaded record id. Selecting an entity with an existing record
+      // keeps the save in Create Mode → the backend rejects duplicates instead
+      // of silently overwriting the old record.
+      const updating = isEditing && !!supportedRecordId;
+      await invoke("save_supported_monthly_drugs_dispensed", {
         data: {
-          id: currentId,
+          ...(updating ? { id: supportedRecordId } : {}),
           clinic_id: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,
           area_id: hierarchy.areaId ? parseInt(hierarchy.areaId) : null,
           branch_id: parseInt(hierarchy.branchId),
           dispense_month: hierarchy.dispenseMonth,
-          // Free drugs fields - keep existing or zero
-          drugs_free_authority: 0,
-          drugs_free_students: 0,
-          drugs_free_infants: 0,
-          drugs_free_breadwinner_women: 0,
-          // Supported drugs fields
+          // Supported drugs fields (free drugs live in the separate free table)
           drugs_supported_authority_value:
             parseFloat(formData.drugs_supported_authority_value) || 0,
           drugs_supported_authority_patient_share:
@@ -239,8 +311,11 @@ const SupportedDrugsTotalsPage = () => {
             parseFloat(formData.drugs_supported_infants_patient_share) || 0,
           notes: formData.notes,
         },
+        isCreate: !updating,
       });
       toast.success("تم حفظ البيانات بنجاح");
+      // Only after an ACTUAL successful save: clear the entity selectors
+      // (branch/area/clinic) but keep the chosen month, and leave Update Mode.
       setFormData({
         drugs_supported_authority_value: 0,
         drugs_supported_authority_patient_share: 0,
@@ -250,9 +325,18 @@ const SupportedDrugsTotalsPage = () => {
         drugs_supported_infants_patient_share: 0,
         notes: "",
       });
-      setCurrentId(null);
+      setSupportedRecordId(null);
+      setEditRecord(null);
+      setIsEditing(false);
+      setHierarchy((prev) => ({
+        ...prev,
+        branchId: "",
+        areaId: "",
+        clinicId: "",
+      }));
       setRefreshTrigger((prev) => prev + 1);
     } catch (error) {
+      // On failure: keep the form exactly as the user typed it (no clearing).
       toast.error(`خطأ: ${error}`);
     } finally {
       setSaving(false);
@@ -402,6 +486,23 @@ const SupportedDrugsTotalsPage = () => {
                   </div>
                 </div>
 
+                {/* Existing-record notice: stays in Create Mode; the backend
+                    rejects a duplicate Create instead of silently updating. */}
+                {!isEditing && supportedRecordId && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/40 text-sm font-bold text-[var(--color-text)]">
+                    <span className="flex items-center gap-2">
+                      <Info size={16} className="text-[var(--color-warning)]" />
+                      توجد بيانات مسجلة بالفعل، يمكنك الذهاب إلى التعديل.
+                    </span>
+                    <button
+                      onClick={() => setIsEditing(true)}
+                      className="px-4 py-1.5 rounded-lg bg-[var(--color-warning)] text-white text-xs font-black hover:brightness-110 transition-all"
+                    >
+                      الانتقال إلى التعديل
+                    </button>
+                  </div>
+                )}
+
                 {/* Category Cards */}
                 <div className="space-y-6">
                   {categories.map(
@@ -517,7 +618,7 @@ const SupportedDrugsTotalsPage = () => {
                   ) : (
                     <Save size={22} />
                   )}
-                  <span>{monthLocked ? "الشهر مقفل" : saving ? "جاري الحفظ..." : "✓ حفظ سجل الصرف"}</span>
+                  <span>{monthLocked ? "الشهر مقفل" : saving ? "جاري الحفظ..." : (isEditing ? "✓ حفظ التعديلات" : "✓ حفظ سجل الصرف")}</span>
                 </button>
               </div>
             )}
@@ -531,6 +632,7 @@ const SupportedDrugsTotalsPage = () => {
         refreshTrigger={refreshTrigger}
         onEdit={handleEditRecord}
         onRefresh={handleCancelEdit}
+        hideDirectPrint
       />
     </div>
     </PrintableTable>

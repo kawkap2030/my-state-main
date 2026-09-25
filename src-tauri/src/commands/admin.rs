@@ -74,16 +74,59 @@ fn get_db_and_backups_paths() -> std::result::Result<(PathBuf, PathBuf), String>
 }
 
 fn zip_db(db_path: &Path, zip_path: &Path, filename: &str) -> std::result::Result<(), String> {
+    // WAL-consistent snapshot via the SQLite Online Backup API. The DB runs
+    // with journal_mode=WAL, so a raw byte-copy of the main .db file would
+    // silently exclude committed transactions still held in the -wal journal
+    // (uncheckpointed), producing backups that miss the newest data — and a
+    // restore from such a backup would resurrect stale data. The backup API
+    // copies a single consistent snapshot that includes the WAL content.
+    let snapshot_path = {
+        let parent = zip_path
+            .parent()
+            .ok_or("Cannot determine backups directory")?;
+        let tag = format!(
+            "{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        );
+        parent.join(format!(".tmp_db_snapshot_{}.db", tag))
+    };
+
+    let result = create_snapshot_and_zip(db_path, zip_path, filename, &snapshot_path);
+    let _ = std::fs::remove_file(&snapshot_path);
+    result
+}
+
+fn create_snapshot_and_zip(
+    db_path: &Path,
+    zip_path: &Path,
+    filename: &str,
+    snapshot_path: &Path,
+) -> std::result::Result<(), String> {
+    let source = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|e| format!("Failed to open database for backup: {}", e))?;
+    source
+        .backup(rusqlite::DatabaseName::Main, snapshot_path, None)
+        .map_err(|e| format!("Failed to create consistent database snapshot: {}", e))?;
+    drop(source);
+
     let file = File::create(zip_path).map_err(|e| format!("Failed to create backup zip: {}", e))?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
     zip.start_file(filename, options).map_err(|e| format!("Failed to write file to zip: {}", e))?;
-    
-    let mut db_file = File::open(db_path).map_err(|e| format!("Failed to open database file: {}", e))?;
+
+    let mut db_file = File::open(snapshot_path)
+        .map_err(|e| format!("Failed to open snapshot file: {}", e))?;
     let mut buffer = Vec::new();
-    db_file.read_to_end(&mut buffer).map_err(|e| format!("Failed to read database file: {}", e))?;
-    
+    db_file.read_to_end(&mut buffer).map_err(|e| format!("Failed to read snapshot file: {}", e))?;
+
     zip.write_all(&buffer).map_err(|e| format!("Failed to write data to zip: {}", e))?;
     zip.finish().map_err(|e| format!("Failed to finish zip file: {}", e))?;
     Ok(())
@@ -145,7 +188,8 @@ fn validate_database_schema(target_db_path: &Path) -> std::result::Result<(), St
         "drug_groups",
         "detailed_drug_dispensed",
         "insulin_dispensed",
-        "monthly_drugs_dispensed",
+        "monthly_free_drugs_dispensed",
+        "monthly_supported_drugs_dispensed",
     ];
 
     let mut stmt = conn
@@ -157,6 +201,13 @@ fn validate_database_schema(target_db_path: &Path) -> std::result::Result<(), St
         .map_err(|e| e.to_string())?
         .filter_map(Result::ok)
         .collect();
+
+    if existing_tables.contains("monthly_drugs_dispensed") {
+        return Err(
+            "هذه النسخة الاحتياطية تستخدم إصدارًا قديمًا من قاعدة البيانات وغير متوافقة مع الإصدار الحالي."
+                .to_string(),
+        );
+    }
 
     let missing_tables: Vec<&str> = required_tables
         .into_iter()
@@ -339,7 +390,8 @@ pub async fn get_data_management_summary(state: State<'_, AppState>) -> std::res
         "drug_group_codes", "insulin_units", "drug_units",
         "judicial_patients", "patient_pdfs", "judicial_medicines",
         "judicial_patient_medicines", "judicial_dispensed",
-        "monthly_drugs_dispensed", "supply_categories", "supplies",
+        "monthly_free_drugs_dispensed", "monthly_supported_drugs_dispensed",
+        "supply_categories", "supplies",
         "monthly_supplies_dispensed", "medical_tickets",
         "users", "audit_log", "dispensing_month_isolation", "manual_locked_months",
         "scheduled_reports", "scheduled_report_history", "export_presets"
@@ -389,10 +441,11 @@ pub async fn get_data_management_summary(state: State<'_, AppState>) -> std::res
         let judicial_count: i64 = conn.query_row("SELECT COUNT(*) FROM judicial_dispensed WHERE clinic_id = ?1", [id], |r| r.get(0)).unwrap_or(0);
         let groups_count: i64 = conn.query_row("SELECT COUNT(*) FROM drug_groups WHERE clinic_id = ?1", [id], |r| r.get(0)).unwrap_or(0);
         let tickets_count: i64 = conn.query_row("SELECT COUNT(*) FROM medical_tickets WHERE clinic_id = ?1", [id], |r| r.get(0)).unwrap_or(0);
-        let monthly_drugs_count: i64 = conn.query_row("SELECT COUNT(*) FROM monthly_drugs_dispensed WHERE clinic_id = ?1", [id], |r| r.get(0)).unwrap_or(0);
+        let monthly_free_count: i64 = conn.query_row("SELECT COUNT(*) FROM monthly_free_drugs_dispensed WHERE clinic_id = ?1", [id], |r| r.get(0)).unwrap_or(0);
+        let monthly_supported_count: i64 = conn.query_row("SELECT COUNT(*) FROM monthly_supported_drugs_dispensed WHERE clinic_id = ?1", [id], |r| r.get(0)).unwrap_or(0);
         let monthly_supplies_count: i64 = conn.query_row("SELECT COUNT(*) FROM monthly_supplies_dispensed WHERE clinic_id = ?1", [id], |r| r.get(0)).unwrap_or(0);
         
-        let total_count = detailed_count + insulin_count + judicial_count + groups_count + tickets_count + monthly_drugs_count + monthly_supplies_count;
+        let total_count = detailed_count + insulin_count + judicial_count + groups_count + tickets_count + monthly_free_count + monthly_supported_count + monthly_supplies_count;
         
         Ok(ClinicCount { id, name, area_name, total_count })
     }).map_err(|e| e.to_string())?;
@@ -470,7 +523,8 @@ pub async fn clear_data(
             conn.execute("DELETE FROM drug_groups", []).map_err(|e| e.to_string())?;
             conn.execute("DELETE FROM insulin_dispensed", []).map_err(|e| e.to_string())?;
             conn.execute("DELETE FROM judicial_dispensed", []).map_err(|e| e.to_string())?;
-            conn.execute("DELETE FROM monthly_drugs_dispensed", []).map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM monthly_free_drugs_dispensed", []).map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM monthly_supported_drugs_dispensed", []).map_err(|e| e.to_string())?;
             conn.execute("DELETE FROM monthly_supplies_dispensed", []).map_err(|e| e.to_string())?;
             conn.execute("DELETE FROM medical_tickets", []).map_err(|e| e.to_string())?;
             Ok(format!("تم تفريغ بيانات الصرف بنجاح (تم الاحتفاظ بالبيانات الأساسية). تم إنشاء نسخة احتياطية تلقائية: {}", auto_backup_filename))
@@ -482,7 +536,8 @@ pub async fn clear_data(
                 "insulin_dispensed",
                 "judicial_dispensed",
                 "medical_tickets",
-                "monthly_drugs_dispensed",
+                "monthly_free_drugs_dispensed",
+                "monthly_supported_drugs_dispensed",
                 "monthly_supplies_dispensed",
                 "patient_pdfs",
                 "judicial_patient_medicines",
@@ -536,7 +591,8 @@ pub async fn clear_data(
             for table in &tables {
                 let allowed_tables = vec![
                     "detailed_drug_dispensed", "drug_groups", "insulin_dispensed",
-                    "judicial_dispensed", "medical_tickets", "monthly_drugs_dispensed",
+                    "judicial_dispensed", "medical_tickets",
+                    "monthly_free_drugs_dispensed", "monthly_supported_drugs_dispensed",
                     "monthly_supplies_dispensed", "patient_pdfs", "judicial_patient_medicines",
                     "judicial_patients", "judicial_medicines", "drugs", "supplies",
                     "insulin_codes", "drug_categories", "drug_units", "drug_group_codes",
@@ -608,7 +664,8 @@ pub async fn clear_data(
                         format!("DELETE FROM judicial_dispensed WHERE clinic_id IN ({})", placeholders),
                         format!("DELETE FROM drug_groups WHERE clinic_id IN ({})", placeholders),
                         format!("DELETE FROM medical_tickets WHERE clinic_id IN ({})", placeholders),
-                        format!("DELETE FROM monthly_drugs_dispensed WHERE clinic_id IN ({})", placeholders),
+                        format!("DELETE FROM monthly_free_drugs_dispensed WHERE clinic_id IN ({})", placeholders),
+                        format!("DELETE FROM monthly_supported_drugs_dispensed WHERE clinic_id IN ({})", placeholders),
                         format!("DELETE FROM monthly_supplies_dispensed WHERE clinic_id IN ({})", placeholders),
                         format!("DELETE FROM judicial_patients WHERE clinic_id IN ({})", placeholders),
                     ];
@@ -649,7 +706,8 @@ pub async fn clear_data(
                         "judicial_dispensed",
                         "drug_groups",
                         "medical_tickets",
-                        "monthly_drugs_dispensed",
+                        "monthly_free_drugs_dispensed",
+                        "monthly_supported_drugs_dispensed",
                         "monthly_supplies_dispensed",
                     ];
                     
@@ -871,7 +929,8 @@ pub async fn export_table_to_csv(
 ) -> std::result::Result<String, String> {
     let allowed_tables = vec![
         "detailed_drug_dispensed", "drug_groups", "insulin_dispensed",
-        "judicial_dispensed", "medical_tickets", "monthly_drugs_dispensed",
+        "judicial_dispensed", "medical_tickets",
+        "monthly_free_drugs_dispensed", "monthly_supported_drugs_dispensed",
         "monthly_supplies_dispensed", "drugs", "supplies",
         "branches", "areas", "clinics", "drug_categories",
         "insulin_codes", "insulin_types", "insulin_categories",
@@ -964,7 +1023,8 @@ pub async fn export_to_excel(
     
     let allowed_tables = vec![
         "detailed_drug_dispensed", "drug_groups", "insulin_dispensed",
-        "judicial_dispensed", "medical_tickets", "monthly_drugs_dispensed",
+        "judicial_dispensed", "medical_tickets",
+        "monthly_free_drugs_dispensed", "monthly_supported_drugs_dispensed",
         "monthly_supplies_dispensed", "drugs", "supplies",
         "branches", "areas", "clinics", "drug_categories",
         "insulin_codes", "insulin_types", "insulin_categories",
@@ -1155,5 +1215,148 @@ pub async fn pick_folder() -> std::result::Result<Option<String>, String> {
         .set_title("اختر مجلد الإخراج")
         .pick_folder();
     Ok(path.map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Phase 6 (C) — WAL-consistency regression test for the backup path.
+    ///
+    /// Reproduces the real leak: with journal_mode=WAL, committed rows that
+    /// are still sitting in the -wal journal (uncheckpointed) are invisible to
+    /// a raw byte-copy of the main .db file, so the old zip_db produced backups
+    /// that were missing the newest data (and restores resurrected stale data).
+    /// The new zip_db snapshots via the SQLite Online Backup API, which always
+    /// reads one consistent view including the WAL.
+    #[test]
+    fn backup_zip_includes_uncheckpointed_wal_data() {
+        let temp = std::env::temp_dir().join(format!(
+            "stats_wal_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let backups_dir = temp.join("backups");
+        std::fs::create_dir_all(&backups_dir).unwrap();
+
+        let db_path = temp.join("medicine_dispenser.db");
+        let zip_path = backups_dir.join("test_backup.zip");
+
+        // 1. Live source connection in WAL mode, real schema.
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(journal_mode.to_lowercase(), "wal");
+        conn.execute_batch(include_str!("../../../schema.sql")).unwrap();
+        // Checkpoint the schema so the main .db really has the tables on disk,
+        // then keep the marker inserts uncheckpointed (in the WAL) — this makes
+        // the raw-copy comparison below demonstrate a pure data leak, matching
+        // the real-world crash/backup timing.
+        let checkpoint: i64 = conn
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(checkpoint, 0, "schema checkpoint must succeed");
+
+        // 2. Marker rows committed but deliberately NOT checkpointed (the
+        //    source connection stays open so the WAL keeps the pages).
+        conn.execute(
+            "INSERT INTO branches (id, name) VALUES (1, 'المخزن')",
+            [],
+        )
+        .unwrap();
+        // free marker → 7771 in 2026-01
+        let free_count = conn
+            .execute(
+                "INSERT INTO monthly_free_drugs_dispensed
+                 (branch_id, area_id, clinic_id, dispense_month, drugs_free_authority)
+                 VALUES (1, NULL, NULL, '2026-01', 7771)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(free_count, 1);
+        // supported marker → 8882 in 2026-02
+        let supported_count = conn
+            .execute(
+                "INSERT INTO monthly_supported_drugs_dispensed
+                 (branch_id, area_id, clinic_id, dispense_month, drugs_supported_authority_value)
+                 VALUES (1, NULL, NULL, '2026-02', 8882)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(supported_count, 1);
+        // extra free row in 2026-02 to prove full completeness, not just markers
+        conn.execute(
+            "INSERT INTO monthly_free_drugs_dispensed
+             (branch_id, area_id, clinic_id, dispense_month, drugs_free_students)
+             VALUES (1, NULL, NULL, '2026-02', 1)",
+            [],
+        )
+        .unwrap();
+
+        // 3. Demonstrate the OLD raw-copy path would lose the markers:
+        //    copy the main .db bytes only (as the old zip_db did), reopen the
+        //    copy without the -wal, and confirm the rows are absent.
+        let raw_copy = temp.join("raw_copy.db");
+        std::fs::copy(&db_path, &raw_copy).unwrap();
+        let raw_conn = rusqlite::Connection::open(&raw_copy).unwrap();
+        let raw_free: i64 = raw_conn
+            .query_row(
+                "SELECT COUNT(*) FROM monthly_free_drugs_dispensed WHERE dispense_month = '2026-01'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let raw_supported: i64 = raw_conn
+            .query_row(
+                "SELECT COUNT(*) FROM monthly_supported_drugs_dispensed WHERE dispense_month = '2026-02'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!((raw_free, raw_supported), (0, 0), "WAL not checkpointed and raw copy excludes markers — reproducing the original leak");
+        drop(raw_conn);
+
+        // 4. NEW path: zip_db creates a consistent snapshot via backup API.
+        zip_db(&db_path, &zip_path, "medicine_dispenser.db").unwrap();
+
+        // 5. Restore path: unzip → schema validation → reopen and read markers.
+        let restore_dir = temp.join("restore");
+        std::fs::create_dir_all(&restore_dir).unwrap();
+        let restored = unzip_db(&zip_path, &restore_dir).unwrap();
+        validate_database_schema(&restored).unwrap();
+
+        let restored_conn = rusqlite::Connection::open(&restored).unwrap();
+        let free_value: f64 = restored_conn
+            .query_row(
+                "SELECT drugs_free_authority FROM monthly_free_drugs_dispensed
+                 WHERE branch_id = 1 AND area_id IS NULL AND clinic_id IS NULL AND dispense_month = '2026-01'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let supported_value: f64 = restored_conn
+            .query_row(
+                "SELECT drugs_supported_authority_value FROM monthly_supported_drugs_dispensed
+                 WHERE branch_id = 1 AND area_id IS NULL AND clinic_id IS NULL AND dispense_month = '2026-02'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let free_total: i64 = restored_conn
+            .query_row("SELECT COUNT(*) FROM monthly_free_drugs_dispensed", [], |r| r.get(0))
+            .unwrap();
+
+        assert_eq!(free_value, 7771.0, "free marker 7771 present in restored snapshot");
+        assert_eq!(supported_value, 8882.0, "supported marker 8882 present in restored snapshot");
+        assert_eq!(free_total, 2, "both free rows (2026-01 and 2026-02) survived the snapshot");
+        drop(restored_conn);
+
+        std::fs::remove_dir_all(&temp).ok();
+    }
 }
 

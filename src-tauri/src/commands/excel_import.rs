@@ -233,27 +233,41 @@ pub async fn import_monthly_drugs_from_excel(
     enforce_isolation_lock(&tx, branch_id, &dispense_month, level, true)?;
 
     // Coexistence guard: totals must not mix branch level with area/clinic level
-    // for the same branch + month.
+    // for the same branch + month (applies to BOTH split tables independently).
     if level == "branch" {
-        let exists_lower: i32 = tx.query_row(
-            "SELECT COUNT(*) FROM monthly_drugs_dispensed 
-             WHERE branch_id = ?1 AND dispense_month = ?2 
+        let exists_lower_free: i32 = tx.query_row(
+            "SELECT COUNT(*) FROM monthly_free_drugs_dispensed
+             WHERE branch_id = ?1 AND dispense_month = ?2
              AND (area_id IS NOT NULL OR clinic_id IS NOT NULL)",
             rusqlite::params![branch_id, dispense_month],
             |r| r.get(0)
         ).unwrap_or(0);
-        if exists_lower > 0 {
+        let exists_lower_sup: i32 = tx.query_row(
+            "SELECT COUNT(*) FROM monthly_supported_drugs_dispensed
+             WHERE branch_id = ?1 AND dispense_month = ?2
+             AND (area_id IS NOT NULL OR clinic_id IS NOT NULL)",
+            rusqlite::params![branch_id, dispense_month],
+            |r| r.get(0)
+        ).unwrap_or(0);
+        if exists_lower_free > 0 || exists_lower_sup > 0 {
             return Err("عذراً، توجد سجلات تفصيلية (مناطق أو عيادات) لهذا الفرع والشهر. لا يمكن استيراد إجمالي على مستوى الفرع منعاً لتضارب البيانات.".to_string());
         }
     } else {
-        let exists_branch: i32 = tx.query_row(
-            "SELECT COUNT(*) FROM monthly_drugs_dispensed 
-             WHERE branch_id = ?1 AND dispense_month = ?2 
+        let exists_branch_free: i32 = tx.query_row(
+            "SELECT COUNT(*) FROM monthly_free_drugs_dispensed
+             WHERE branch_id = ?1 AND dispense_month = ?2
              AND area_id IS NULL AND clinic_id IS NULL",
             rusqlite::params![branch_id, dispense_month],
             |r| r.get(0)
         ).unwrap_or(0);
-        if exists_branch > 0 {
+        let exists_branch_sup: i32 = tx.query_row(
+            "SELECT COUNT(*) FROM monthly_supported_drugs_dispensed
+             WHERE branch_id = ?1 AND dispense_month = ?2
+             AND area_id IS NULL AND clinic_id IS NULL",
+            rusqlite::params![branch_id, dispense_month],
+            |r| r.get(0)
+        ).unwrap_or(0);
+        if exists_branch_free > 0 || exists_branch_sup > 0 {
             return Err("عذراً، توجد بيانات مجمعة على مستوى الفرع لهذا الشهر. لا يمكن استيراد سجلات مناطق أو عيادات منعاً للتكرار.".to_string());
         }
     }
@@ -303,53 +317,95 @@ pub async fn import_monthly_drugs_from_excel(
             }
         }
 
-        // Check if record already exists
-        let existing: i32 = tx.query_row(
-            "SELECT COUNT(*) FROM monthly_drugs_dispensed WHERE branch_id=?1 AND area_id IS ?2 AND clinic_id IS ?3 AND dispense_month=?4",
-            rusqlite::params![branch_id, area_id, clinic_id, dispense_month],
-            |r| r.get(0)
-        ).unwrap_or(0);
+        let free_nonzero = free_authority != 0.0 || free_students != 0.0
+            || free_infants != 0.0 || free_breadwinner != 0.0;
+        let supp_nonzero = supp_auth_val != 0.0 || supp_auth_share != 0.0
+            || supp_std_val != 0.0 || supp_std_share != 0.0
+            || supp_inf_val != 0.0 || supp_inf_share != 0.0;
 
-        if existing > 0 {
-            // Re-import over the same hierarchy: update in place and report it.
-            tx.execute(
-                "UPDATE monthly_drugs_dispensed SET 
-                    drugs_free_authority=?1, drugs_free_students=?2, drugs_free_infants=?3,
-                    drugs_free_breadwinner_women=?4,
-                    drugs_supported_authority_value=?5, drugs_supported_authority_patient_share=?6,
-                    drugs_supported_students_value=?7, drugs_supported_students_patient_share=?8,
-                    drugs_supported_infants_value=?9, drugs_supported_infants_patient_share=?10
-                WHERE branch_id=?11 AND area_id IS ?12 AND clinic_id IS ?13 AND dispense_month=?14",
-                rusqlite::params![
-                    free_authority, free_students, free_infants, free_breadwinner,
-                    supp_auth_val, supp_auth_share,
-                    supp_std_val, supp_std_share,
-                    supp_inf_val, supp_inf_share,
-                    branch_id, area_id, clinic_id, dispense_month
-                ]
-            ).map_err(|e| format!("الصف {}: فشل التحديث - {}", display_row, e))?;
+        let mut row_updated = false;
+
+        // Free side → monthly_free_drugs_dispensed. Upsert by logical key so a
+        // re-import over the same branch/area/clinic/month updates in place.
+        if free_nonzero {
+            let existing_free: i32 = tx.query_row(
+                "SELECT COUNT(*) FROM monthly_free_drugs_dispensed WHERE branch_id=?1 AND area_id IS ?2 AND clinic_id IS ?3 AND dispense_month=?4",
+                rusqlite::params![branch_id, area_id, clinic_id, dispense_month],
+                |r| r.get(0)
+            ).unwrap_or(0);
+            if existing_free > 0 {
+                tx.execute(
+                    "UPDATE monthly_free_drugs_dispensed SET
+                        drugs_free_authority=?1, drugs_free_students=?2, drugs_free_infants=?3,
+                        drugs_free_breadwinner_women=?4
+                    WHERE branch_id=?5 AND area_id IS ?6 AND clinic_id IS ?7 AND dispense_month=?8",
+                    rusqlite::params![
+                        free_authority, free_students, free_infants, free_breadwinner,
+                        branch_id, area_id, clinic_id, dispense_month
+                    ]
+                ).map_err(|e| format!("الصف {}: فشل تحديث الجانب المجاني - {}", display_row, e))?;
+                result.warnings.push(format!("الصف {}: تم تحديث سجل مجاني موجود", display_row));
+            } else {
+                tx.execute(
+                    "INSERT INTO monthly_free_drugs_dispensed (
+                        branch_id, area_id, clinic_id, dispense_month,
+                        drugs_free_authority, drugs_free_students, drugs_free_infants,
+                        drugs_free_breadwinner_women
+                    ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                    rusqlite::params![
+                        branch_id, area_id, clinic_id, dispense_month,
+                        free_authority, free_students, free_infants, free_breadwinner
+                    ]
+                ).map_err(|e| format!("الصف {}: {}", display_row, e))?;
+            }
+            row_updated = true;
+        }
+
+        // Supported side → monthly_supported_drugs_dispensed.
+        if supp_nonzero {
+            let existing_sup: i32 = tx.query_row(
+                "SELECT COUNT(*) FROM monthly_supported_drugs_dispensed WHERE branch_id=?1 AND area_id IS ?2 AND clinic_id IS ?3 AND dispense_month=?4",
+                rusqlite::params![branch_id, area_id, clinic_id, dispense_month],
+                |r| r.get(0)
+            ).unwrap_or(0);
+            if existing_sup > 0 {
+                tx.execute(
+                    "UPDATE monthly_supported_drugs_dispensed SET
+                        drugs_supported_authority_value=?1, drugs_supported_authority_patient_share=?2,
+                        drugs_supported_students_value=?3, drugs_supported_students_patient_share=?4,
+                        drugs_supported_infants_value=?5, drugs_supported_infants_patient_share=?6
+                    WHERE branch_id=?7 AND area_id IS ?8 AND clinic_id IS ?9 AND dispense_month=?10",
+                    rusqlite::params![
+                        supp_auth_val, supp_auth_share,
+                        supp_std_val, supp_std_share,
+                        supp_inf_val, supp_inf_share,
+                        branch_id, area_id, clinic_id, dispense_month
+                    ]
+                ).map_err(|e| format!("الصف {}: فشل تحديث الجانب المدعم - {}", display_row, e))?;
+                result.warnings.push(format!("الصف {}: تم تحديث سجل مدعم موجود", display_row));
+            } else {
+                tx.execute(
+                    "INSERT INTO monthly_supported_drugs_dispensed (
+                        branch_id, area_id, clinic_id, dispense_month,
+                        drugs_supported_authority_value, drugs_supported_authority_patient_share,
+                        drugs_supported_students_value, drugs_supported_students_patient_share,
+                        drugs_supported_infants_value, drugs_supported_infants_patient_share
+                    ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                    rusqlite::params![
+                        branch_id, area_id, clinic_id, dispense_month,
+                        supp_auth_val, supp_auth_share,
+                        supp_std_val, supp_std_share,
+                        supp_inf_val, supp_inf_share
+                    ]
+                ).map_err(|e| format!("الصف {}: {}", display_row, e))?;
+            }
+            row_updated = true;
+        }
+
+        if row_updated {
             result.success_count += 1;
-            result.warnings.push(format!("الصف {}: تم تحديث سجل موجود", display_row));
         } else {
-            // Insert
-            tx.execute(
-                "INSERT INTO monthly_drugs_dispensed (
-                    branch_id, area_id, clinic_id, dispense_month,
-                    drugs_free_authority, drugs_free_students, drugs_free_infants,
-                    drugs_free_breadwinner_women,
-                    drugs_supported_authority_value, drugs_supported_authority_patient_share,
-                    drugs_supported_students_value, drugs_supported_students_patient_share,
-                    drugs_supported_infants_value, drugs_supported_infants_patient_share
-                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
-                rusqlite::params![
-                    branch_id, area_id, clinic_id, dispense_month,
-                    free_authority, free_students, free_infants, free_breadwinner,
-                    supp_auth_val, supp_auth_share,
-                    supp_std_val, supp_std_share,
-                    supp_inf_val, supp_inf_share
-                ]
-            ).map_err(|e| format!("الصف {}: {}", display_row, e))?;
-            result.success_count += 1;
+            result.warnings.push(format!("الصف {}: جميع القيم صفر — تم تجاهل الصف", display_row));
         }
     }
 

@@ -25,7 +25,6 @@ export const routePreloaders = {
   '/transactions/insulin-dispensing': () => import('../modules/transactions/insulin-dispensing/InsulinDispensingPage'),
   '/transactions/judicial-dispensing': () => import('../modules/transactions/judicial-dispensing/JudicialDispensingPage'),
   '/transactions/group-costs': () => import('../modules/transactions/group-costs/GroupCostsPage'),
-  '/transactions/branch-batch-summary': () => import('../modules/transactions/BranchBatchSummaryPage'),
   '/transactions/quick-tickets': () => import('../modules/transactions/QuickTicketsPage'),
 
   '/reports/analytical': () => import('../modules/reports/analytical/AnalyticalReportsPage'),
