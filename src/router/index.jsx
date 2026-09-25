@@ -144,7 +144,6 @@ const router = createHashRouter([
       { path: 'reports/financial', element: <Suspensed><FinancialReportsPage /></Suspensed> },
       { path: 'reports/comparison', element: <Suspensed><ComparisonReportsPage /></Suspensed> },
       { path: 'reports/cost-analysis', element: <Suspensed><CostAnalysisPage /></Suspensed> },
-      { path: 'reports/temporal', element: <Suspensed><TemporalAnalysisHub /></Suspensed> },
       { path: 'reports/executive', element: <Suspensed><ExecutiveReportPage /></Suspensed> },
       { path: 'reports/anomaly', element: <Suspensed><AnomalyDetectionPage /></Suspensed> },
       { path: 'reports/demographic', element: <Suspensed><DemographicReportPage /></Suspensed> },

@@ -278,7 +278,7 @@ const searchablePages = [
     role: 'viewer',
   },
   {
-    path: '/reports/temporal',
+    path: '/reports/temporal-hub',
     label: 'مركز التحليل الزمني',
     desc: 'تحليل البيانات عبر الزمن (شهري/سنوي)',
     icon: BarChart3,

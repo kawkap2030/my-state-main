@@ -52,7 +52,7 @@ const ALL_ROUTES = [
   { id: 'pivot',              path: '/reports/pivot',                             label: 'التقارير المحورية',      category: 'التقارير',         icon: LayoutGrid },
   { id: 'judicial-analytics', path: '/reports/judicial-analytics',                label: 'تحليل الأحكام',          category: 'التقارير',         icon: Scale },
   { id: 'compliance',         path: '/reports/compliance',                        label: 'تقرير الامتثال',         category: 'التقارير',         icon: ClipboardCheck },
-  { id: 'temporal',           path: '/reports/temporal',                          label: 'التحليل الزمني',         category: 'التقارير',         icon: BarChart3 },
+  { id: 'temporal',           path: '/reports/temporal-hub',                      label: 'مركز التحليل الزمني',   category: 'التقارير',         icon: BarChart3 },
 
   // ── Specialized Reports ─────────────────────────────────────────────────
   { id: 'r-drugs',            path: '/reports/specialized/drugs',                 label: 'تقرير الأدوية التفصيلي',  category: 'تقارير متخصصة',    icon: Pill },
