@@ -141,21 +141,10 @@ pub fn save_drug_group_costs_bulk(state: State<'_, AppState>, data: Vec<DrugGrou
             continue;
         }
 
-        // Bulk edit: item.id is set when the frontend loaded an existing row.
-        // Update it in place instead of skipping it.
-        if let Some(existing_row_id) = item.id {
-            tx.execute(
-                "UPDATE drug_groups SET 
-                    name = ?1, cost = ?2, clinic_id = ?3, area_id = ?4, dispense_month = ?5, group_code_id = ?6, branch_id = ?7
-                 WHERE id = ?8",
-                rusqlite::params![
-                    item.name, item.cost, item.clinic_id, item.area_id, item.dispense_month, item.group_code_id, branch_id, existing_row_id
-                ],
-            ).map_err(|e| e.to_string())?;
-            saved_count += 1;
-            continue;
-        }
-
+        // NOTE: Bulk entry is CREATE-only (not an edit mode). The presence of an
+        // item.id / existingId is deliberately NOT used to UPDATE an existing row.
+        // A record that already exists for this group + level + location + month is
+        // treated as a duplicate and SKIPPED; the existing record is left untouched.
         let existing_id: Option<i32> = tx.query_row(
             "SELECT id FROM drug_groups 
              WHERE dispense_month = ?1 AND group_code_id = ?2 

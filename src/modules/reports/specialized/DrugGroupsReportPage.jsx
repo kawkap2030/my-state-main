@@ -75,12 +75,13 @@ const DrugGroupsReportPage = () => {
         const area = metaData.areas?.find(a => a.id === r.area_id);
         const clinic = metaData.clinics?.find(c => c.id === r.clinic_id);
         const master = metaData.groups?.find(g => g.id === r.group_code_id);
-        
+
+        const selectedBranchName = metaData.branches?.find(b => b.id === hierarchy.branchId)?.name || 'فرع مجمع';
         const branchName = branch?.name || 'فرع مجمع';
         const areaName = area?.name || 'منطقة مجمعة';
         const clinicName = clinic?.name || 'عيادة مجمعة';
-        const locationName = r.clinic_id ? clinicName : r.area_id ? areaName : branchName;
-        
+        const locationName = hierarchy.clinicId ? clinicName : hierarchy.areaId ? areaName : selectedBranchName;
+
         return {
           ...r,
           groupName: r.name || master?.name || 'مجموعة غير معروفة',
@@ -159,12 +160,26 @@ const DrugGroupsReportPage = () => {
     return { stats: s, groupedData: finalGroupedData, insights: ins };
   }, [data, viewType]);
 
-  const columns = [
-    { header: 'الشهر', render: (row) => <span className="text-xs">{row.dispense_month}</span> },
-    { 
-      header: 'الموقع', 
+  const locationColumns = {
+    analytical: {
+      header: 'الموقع',
       render: (row) => <span className="text-xs font-bold">{row.locationName}</span>
     },
+    administrative: {
+      header: 'المسار الإداري',
+      render: (row) => {
+        const pathParts = [];
+        if (row.branch_id) pathParts.push(row.branchName);
+        if (row.area_id) pathParts.push(row.areaName);
+        if (row.clinic_id) pathParts.push(row.clinicName);
+        return <span className="text-xs font-bold">{pathParts.length > 0 ? pathParts.join(' > ') : row.branchName}</span>;
+      }
+    }
+  };
+
+  const columns = [
+    { header: 'الشهر', render: (row) => <span className="text-xs">{row.dispense_month}</span> },
+    viewType === 'administrative' ? locationColumns.administrative : locationColumns.analytical,
     { 
       header: 'اسم المجموعة', 
       render: (row) => (
@@ -292,9 +307,9 @@ const DrugGroupsReportPage = () => {
 
       {/* Stats Dashboard */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <Card className="p-6 bg-purple-700 text-white border-none shadow-xl">
+        <Card className="p-6 bg-purple-700 text-white border-none shadow-xl min-w-0">
           <p className="text-[10px] opacity-60 mb-1 uppercase tracking-tighter">إجمالي التكلفة</p>
-          <h2 className="text-3xl font-black">{stats.totalCost.toLocaleString()} <span className="text-xs">ج.م</span></h2>
+          <h2 className="w-full max-w-full min-w-0 break-words text-2xl font-black tabular-nums leading-tight xl:text-3xl">{stats.totalCost.toLocaleString()} <span className="text-xs">ج.م</span></h2>
         </Card>
         <Card className="p-6 bg-[var(--color-bg-card)] border-none shadow-md">
           <p className="text-[10px] text-[var(--color-text-muted)] mb-1 uppercase tracking-tighter">عدد المجموعات</p>
@@ -309,6 +324,16 @@ const DrugGroupsReportPage = () => {
 
       {/* Table Section */}
       <Card className="p-0 overflow-hidden shadow-2xl border-none">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800">
+          <h3 className="text-sm font-bold">
+            {viewType === 'administrative' ? 'التجميع حسب الفروع والمناطق والعيادات' : 'التجميع حسب المجموعات'}
+          </h3>
+          {viewType === 'administrative' ? (
+            <span className="text-[10px] font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30">عرض إداري</span>
+          ) : (
+            <span className="text-[10px] font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-600 dark:bg-purple-900/30">عرض تحليلي</span>
+          )}
+        </div>
         <Table columns={columns} data={groupedData} loading={loading} />
         {data.length === 0 && !loading && (
           <div className="p-32 text-center text-slate-300 italic">بانتظار اختيار المعايير وتوليد البيانات...</div>

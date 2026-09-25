@@ -333,11 +333,13 @@ const GroupCostsPage = () => {
       const payload = bulkData
         .filter((item) => {
           const currentCost = parseFloat(item.cost) || 0;
-          const origCost = parseFloat(item.originalCost) || 0;
-          return currentCost > 0 && currentCost !== origCost;
+          // Send every group with a valid cost. existingId is NOT used to
+          // exclude items nor to UPDATE — the backend decides duplicate vs new
+          // using the group + level + location + month key (skip / insert).
+          return currentCost > 0;
         })
         .map((item) => ({
-          id: item.existingId,
+          id: null,
           name: item.name,
           cost: parseFloat(item.cost) || 0,
           clinic_id: hierarchy.clinicId ? parseInt(hierarchy.clinicId) : null,
@@ -348,7 +350,7 @@ const GroupCostsPage = () => {
         }));
 
       if (payload.length === 0) {
-        toast.info("لا توجد إدخالات أو تعديلات جديدة لحفظها");
+        toast.info("لا توجد مجموعات جديدة لحفظها");
         setSaving(false);
         return;
       }
@@ -359,7 +361,7 @@ const GroupCostsPage = () => {
 
       if (result.skipped_names && result.skipped_names.length > 0) {
         toast.warning(
-          `تم حفظ ${result.saved_count} بنجاح، وتخطي ${result.skipped_names.length} مجموعة وهي:\n${result.skipped_names.join(" ، ")}`,
+          `تم حفظ ${result.saved_count} مجموعة.\nتم تجاوز ${result.skipped_names.length} مجموعة لأنها مسجلة مسبقًا:\n- ${result.skipped_names.join("\n- ")}`,
           { duration: 8000 },
         );
       } else {
