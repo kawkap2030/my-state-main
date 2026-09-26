@@ -12,7 +12,7 @@
  *   • Before click: nothing loaded (just this tiny facade ~1KB)
  *   • After click: ExportMenuInner + exportExcel/Word/Pdf chunks load
  */
-import React, { Suspense, lazy, useState, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useImperativeHandle } from 'react';
 import { Download, ChevronDown } from 'lucide-react';
 
 const ExportMenuInner = lazy(() => import('./ExportMenuInner'));
@@ -44,8 +44,20 @@ const ExportLoadingFallback = () => (
  * This approach means the ~1.5MB of export libraries are only
  * fetched on demand, not on page load.
  */
-const ExportMenu = (props) => {
+const ExportMenu = React.forwardRef(function ExportMenu(props, ref) {
   const [userClicked, setUserClicked] = useState(false);
+  // Counter of external print-preview requests (e.g. Ctrl+P in a page hosting
+  // a MonthlyHistoryTable). Each request re-opens the print preview modal.
+  const [printRequest, setPrintRequest] = useState(0);
+
+  // Imperative API so parents can open the EXACT same PrintPreviewModal that
+  // ExportMenu → "طباعة التقرير" opens (same data, same columns, same props).
+  useImperativeHandle(ref, () => ({
+    openPrintPreview: () => {
+      setUserClicked(true);
+      setPrintRequest((n) => n + 1);
+    },
+  }), []);
 
   // Once the user has shown intent, never go back to the placeholder
   const handleClick = useCallback(() => {
@@ -78,9 +90,9 @@ const ExportMenu = (props) => {
 
   return (
     <Suspense fallback={<ExportLoadingFallback />}>
-      <ExportMenuInner {...props} />
+      <ExportMenuInner {...props} printRequest={printRequest} />
     </Suspense>
   );
-};
+});
 
 export default ExportMenu;

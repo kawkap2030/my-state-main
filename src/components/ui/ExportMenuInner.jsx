@@ -22,7 +22,7 @@ import { buildHierarchyLabel } from '../../utils/reportUtils';
  * libraries (exceljs, jspdf, html-to-image) are only fetched when
  * the user actually opens the export menu.
  */
-const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = false, onCustomExport = null, chartImage = null }) => {
+const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = false, onCustomExport = null, chartImage = null, printRequest = 0 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [showPrintPreview, setShowPrintPreview] = useState(false);
   const [showExportSettings, setShowExportSettings] = useState(false);
@@ -246,6 +246,16 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
     setShowPrintPreview(true);
     setIsOpen(false);
   };
+
+  // ── External print-preview request (Ctrl+P via ExportMenu's shared API) ──
+  // Opens the exact same PrintPreviewModal the "طباعة التقرير" menu item
+  // would open — same data, same columns, same props — so both paths render
+  // the identical paper (never the live page). Non-MT consumers simply never
+  // pass printRequest (defaults to 0), so the effect stays a no-op for them.
+  useEffect(() => {
+    if (printRequest > 0) handlePrintClick();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [printRequest]);
 
   const exportOptions = [
     {

@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useGlobalApp } from '../../context/useGlobalApp';
 import invoke from '../../api/tauriApi';
-import { History, Search, Loader2, RefreshCw, X, Lock, Unlock, AlertCircle, Printer, Hash, DollarSign, Package, Users } from 'lucide-react';
+import { History, Search, Loader2, RefreshCw, X, Lock, Unlock, AlertCircle, Hash, DollarSign, Package, Users } from 'lucide-react';
 import Card from '../ui/Card';
 import Modal from '../ui/Modal';
 import Pagination from '../ui/Pagination';
@@ -12,7 +12,6 @@ import ExportMenu from '../ui/ExportMenu';
 import { useToast } from '../ui/Toast';
 import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts';
 import PrintableTable from './PrintableTable';
-import { executePrint } from '../../utils/exportPrint';
 
 // Arabic month names for display
 const ARABIC_MONTHS = [
@@ -36,8 +35,16 @@ const formatNumber = (num) => {
 
 
 const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh, hideDirectPrint = false }) => {
+  // hideDirectPrint is kept for API compatibility (Free/Supported pages pass
+  // it), but it no longer hides or disables anything: the direct-print button
+  // was removed earlier, and Ctrl+P always opens the shared print preview.
+  void hideDirectPrint;
+
   const { activeHierarchy, checkIsMonthLocked } = useGlobalApp();
   const toast = useToast();
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the exact same print preview
+  // modal that ExportMenu → "طباعة التقرير" opens, in both paths.
+  const exportMenuRef = useRef(null);
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [branches, setBranches] = useState({});
@@ -516,11 +523,12 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh, hideDire
   };
 
   // ─── Keyboard Shortcuts ───
-  useKeyboardShortcuts(
-    hideDirectPrint ? [] : [
-      { key: 'p', ctrl: true, handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }), description: 'طباعة' },
-    ]
-  );
+  // Ctrl+P always opens the SAME PrintPreviewModal that ExportMenu →
+  // "طباعة التقرير" opens (via the shared imperative API on ExportMenu).
+  // It no longer prints the live page, and hideDirectPrint no longer disables it.
+  useKeyboardShortcuts([
+    { key: 'p', ctrl: true, handler: () => exportMenuRef.current?.openPrintPreview(), description: 'معاينة الطباعة' },
+  ]);
 
   if (loading) return (
     <div className="flex items-center justify-center p-20">
@@ -794,16 +802,8 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh, hideDire
               >
                 <RefreshCw size={14} /> تحديث
               </button>
-              {!hideDirectPrint && (
-              <button 
-                onClick={() => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true })} 
-                className="px-4 py-2 rounded-xl border border-[var(--color-border)] text-sm font-bold bg-[var(--color-bg-card)] text-[var(--color-text)] hover:bg-[var(--color-primary)] hover:text-white transition-all flex items-center gap-1"
-                title="Ctrl+P"
-              >
-                <Printer size={14} /> طباعة
-              </button>
-              )}
               <ExportMenu 
+                ref={exportMenuRef}
                 data={filteredRecords} 
                 columns={exportColumns} 
                 options={{ 
