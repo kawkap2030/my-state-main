@@ -7,6 +7,7 @@ import Button from '../../../components/ui/Button';
 import Table from '../../../components/ui/Table';
 import PrintableTable from '../../../components/common/PrintableTable';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import { useGlobalApp } from '../../../context/useGlobalApp';
@@ -22,6 +23,11 @@ const FinancialReportsPage = () => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
   const [hierarchy, setHierarchy] = useState({ branchId: '', areaId: '', clinicId: '', dispenseMonth: new Date().toISOString().substring(0, 7) });
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   const handleFetch = async () => {
     if (!hierarchy.branchId) {
@@ -80,7 +86,7 @@ const FinancialReportsPage = () => {
         icon={TrendingUp} 
         description="تحليل التدفقات المالية، المبالغ المحصلة، وقيم الدعم الكلية للمنظومة."
         actions={
-          <ExportMenu data={data} columns={exportColumns} options={{ title: 'الرقابة والتقارير المالية', fileName: 'financial_report', subtitle: 'تحليل التدفقات المالية' }} />
+          <ExportMenu ref={exportMenuRef} data={data} columns={exportColumns} options={{ title: 'الرقابة والتقارير المالية', fileName: 'financial_report', subtitle: 'تحليل التدفقات المالية' }} />
         }
       />
 

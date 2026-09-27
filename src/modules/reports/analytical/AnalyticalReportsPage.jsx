@@ -7,6 +7,7 @@ import Button from '../../../components/ui/Button';
 import Table from '../../../components/ui/Table';
 import PrintableTable from '../../../components/common/PrintableTable';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import { useGlobalApp } from '../../../context/useGlobalApp';
@@ -27,6 +28,11 @@ const AnalyticalReportsPage = () => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   const handleGenerate = async () => {
     if (!hierarchy.branchId) {
@@ -166,7 +172,7 @@ const AnalyticalReportsPage = () => {
           icon={BarChart3} 
           description="لوحة تحليلية متكاملة لرصد حركة المنصرف والعمليات بدقة متناهية."
           actions={
-            <ExportMenu data={filteredData} columns={exportColumns} options={{ title: 'التحليل الإحصائي العام', fileName: 'analytical_report', subtitle: 'لوحة تحليلية متكاملة لرصد حركة المنصرف' }} />
+            <ExportMenu ref={exportMenuRef} data={filteredData} columns={exportColumns} options={{ title: 'التحليل الإحصائي العام', fileName: 'analytical_report', subtitle: 'لوحة تحليلية متكاملة لرصد حركة المنصرف' }} />
           }
         />
       </div>

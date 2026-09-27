@@ -6,6 +6,7 @@ import Card from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import Table from '../../../components/ui/Table';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { useToast } from '../../../components/ui/Toast';
 import { useGlobalApp } from '../../../context/useGlobalApp';
 import invoke from '../../../api/tauriApi';
@@ -35,6 +36,11 @@ const JudicialReportPage = () => {
     dispenseMonth: activeHierarchy.dispenseMonth || new Date().toISOString().substring(0, 7) 
   });
   const chartRef = React.useRef(null);
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   const handleFetch = async () => {
     if (!hierarchy.branchId) {
@@ -162,7 +168,7 @@ const JudicialReportPage = () => {
         title="تقرير الأحكام القضائية" 
         icon={Landmark} 
         description="متابعة مالية دقيقة لمنصرف الأدوية الصادر بها أحكام قضائية وتكلفة كل مريض."
-        actions={<ExportMenu data={data} columns={exportColumns} onCustomExport={handlePremiumExport} options={{ title: 'تقرير الأحكام القضائية', fileName: 'judicial_report' }} />}
+        actions={<ExportMenu ref={exportMenuRef} data={data} columns={exportColumns} onCustomExport={handlePremiumExport} options={{ title: 'تقرير الأحكام القضائية', fileName: 'judicial_report' }} />}
       />
 
       {/* Filter Card */}
