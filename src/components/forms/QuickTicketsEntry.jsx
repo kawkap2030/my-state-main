@@ -13,6 +13,7 @@ import ConfirmModal from '../ui/ConfirmModal';
 import Select from '../ui/Select';
 import MonthInput from '../ui/MonthInput';
 import ExportMenu from '../ui/ExportMenu';
+import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts';
 import useLockGuard from '../../hooks/useLockGuard';
 
 /**
@@ -61,6 +62,15 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
     } catch { /* ignore quota/availability errors */ }
   }, [entrySystem, selectedWeek, copySourceWeek]);
 
+  // ── Print: Ctrl+P → same PrintPreviewModal as ExportMenu → "طباعة التقرير" ──
+  // Uses the established useKeyboardShortcuts hook: a single keydown listener
+  // (cleaned up on unmount) that preventDefault()s the native print dialog and
+  // only opens the unified print preview. No window.print()/executePrint()
+  // direct path is ever triggered from here.
+  useKeyboardShortcuts([
+    { key: 'p', ctrl: true, handler: () => exportMenuRef.current?.openPrintPreview(), description: 'معاينة الطباعة' },
+  ]);
+
   const [isSupported, setIsSupported] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('عام');
   const [pendingConflict, setPendingConflict] = useState(null);
@@ -70,6 +80,11 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
   const { setWorkspaceMode, isIsolationExceptionActive } = useGlobalApp();
   const { isLocked, checkAndWarn, LockBanner } = useLockGuard(dispenseMonth);
   const savedDataRef = useRef([]);
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same print-preview
+  // modal that ExportMenu → "طباعة التقرير" opens (via the shared imperative
+  // API: openPrintPreview → printRequest → PrintPreviewModal). Mirrors the
+  // unified print path used by MonthlyHistoryTable.
+  const exportMenuRef = useRef(null);
   // Holds rows converted to the TARGET system's shape while switching
   // weekly ↔ monthly (see requestSystemSwitch) until the next load merges them
   // on top of the backend data — so nothing typed is ever silently cleared.
@@ -543,14 +558,14 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
     setEntrySystem(target);
   };
 
-  const calculateTotals = () => {
+  const calculateTotals = (rows = data) => {
     const totals = {
       morning_56b: 0, morning_56c: 0, evening_56b: 0, evening_56c: 0,
       morning_authority: 0, morning_students: 0, morning_infants: 0,
       evening_authority: 0, evening_students: 0, evening_infants: 0,
     };
     const weekTotals = [0, 1, 2, 3].map(() => zeroWeek());
-    data.forEach(row => {
+    rows.forEach(row => {
       Object.keys(totals).forEach(k => { totals[k] += row[k] || 0; });
       if (entrySystem === 'monthly') {
         (row.weeks || []).forEach((wk, wi) => {
@@ -883,16 +898,19 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
   };
 
   // ── Export data with a totals row appended ────────────────────────────
+  // Exports the FILTERED rows currently shown (groupedData is built from
+  // filteredData), so the file matches the screen when search is active.
   // The totals row reuses the SAME shapes calculateTotals() already produces:
   // flat counters for weekly and a summed `weeks[0..3]` array for monthly — so
   // Excel/PDF/Word all render a final 'الإجمالي' row without any export-engine
   // changes. Marked with isTotalRow so the entity column shows 'الإجمالي'.
   const exportData = (() => {
-    if (!data || data.length === 0) return [];
+    if (!filteredData || filteredData.length === 0) return [];
+    const { totals: filteredTotals, weekTotals: filteredWeekTotals } = calculateTotals(filteredData);
     if (entrySystem === 'weekly') {
-      return [...data, { isTotalRow: true, ...totals }];
+      return [...filteredData, { isTotalRow: true, ...filteredTotals }];
     }
-    return [...data, { isTotalRow: true, weeks: weekTotals.map(w => ({ ...w })) }];
+    return [...filteredData, { isTotalRow: true, weeks: filteredWeekTotals.map(w => ({ ...w })) }];
   })();
 
   return (
@@ -900,7 +918,7 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
       <LockBanner />
 
       {/* ── Scope Bar ─────────────────────────────────────────────── */}
-      <div className="bg-gradient-to-r from-indigo-50/90 via-purple-50/90 to-blue-50/90 dark:from-indigo-950/30 dark:via-purple-950/30 dark:to-blue-950/30 p-4 rounded-2xl border border-indigo-200/80 dark:border-indigo-800/40 shadow-sm space-y-4">
+      <div className="bg-gradient-to-r from-indigo-50/90 via-purple-50/90 to-blue-50/90 dark:from-indigo-950/30 dark:via-purple-950/30 dark:to-blue-950/30 p-4 rounded-2xl border border-indigo-200/80 dark:border-indigo-800/40 shadow-sm space-y-4 no-print">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2 font-black text-sm text-indigo-800 dark:text-indigo-300">
             <Building2 size={18} className="text-indigo-600 dark:text-indigo-400" />
@@ -1029,7 +1047,7 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
       </div>
 
       {/* ── Header Controls (System / Week / Type / Search / Actions) ───── */}
-      <div className="flex flex-wrap justify-between items-center gap-4 bg-white dark:bg-slate-800 p-4 rounded-2xl border border-[var(--color-border)] shadow-sm">
+      <div className="flex flex-wrap justify-between items-center gap-4 bg-white dark:bg-slate-800 p-4 rounded-2xl border border-[var(--color-border)] shadow-sm no-print">
         <div className="flex items-center gap-4 flex-wrap">
           {/* Week Selector (Only in Weekly mode) */}
           {entrySystem === 'weekly' ? (
@@ -1175,6 +1193,7 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
           </Button>
 
           <ExportMenu
+            ref={exportMenuRef}
             data={exportData}
             columns={exportColumns}
             options={exportOptions}
@@ -1189,7 +1208,7 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
 
       {/* ── Keyboard Shortcuts Legend ──────────────────────────────────── */}
       {scopeReady() && !loading && data.length > 0 && (
-        <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100/80 dark:bg-slate-900/50 px-3 py-1.5 rounded-xl border border-slate-200/60 dark:border-slate-800">
+        <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100/80 dark:bg-slate-900/50 px-3 py-1.5 rounded-xl border border-slate-200/60 dark:border-slate-800 no-print">
           <div className="flex items-center gap-2">
             <Zap size={14} className="text-amber-500 animate-pulse" />
             <span>تنقل سريع باللوحة: استخدم أسهم الاتجاهات <kbd className="px-1 py-0.5 bg-white dark:bg-slate-800 rounded border border-slate-300 dark:border-slate-700 font-mono text-[10px]">↑</kbd> <kbd className="px-1 py-0.5 bg-white dark:bg-slate-800 rounded border border-slate-300 dark:border-slate-700 font-mono text-[10px]">↓</kbd> <kbd className="px-1 py-0.5 bg-white dark:bg-slate-800 rounded border border-slate-300 dark:border-slate-700 font-mono text-[10px]">←</kbd> <kbd className="px-1 py-0.5 bg-white dark:bg-slate-800 rounded border border-slate-300 dark:border-slate-700 font-mono text-[10px]">→</kbd> أو <kbd className="px-1.5 py-0.5 bg-white dark:bg-slate-800 rounded border border-slate-300 dark:border-slate-700 font-mono text-[10px]">Enter</kbd> للانتقال المباشر بين الخانات.</span>
@@ -1202,7 +1221,7 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
 
       {/* ── Scope hint / loading / grid state ──────────────────────────── */}
       {!scopeReady() && (
-        <div className="p-8 text-center opacity-60 bg-white dark:bg-slate-800 rounded-2xl border border-[var(--color-border)]">
+        <div className="p-8 text-center opacity-60 bg-white dark:bg-slate-800 rounded-2xl border border-[var(--color-border)] no-print">
           <AlertCircle className="mx-auto mb-2 text-amber-500" size={32} />
           <p className="font-bold text-slate-700 dark:text-slate-300">
             {!dispenseMonth ? 'الرجاء تحديد الشهر أولاً'
@@ -1214,14 +1233,14 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
       )}
 
       {scopeReady() && loading && (
-        <div className="p-8 text-center bg-white dark:bg-slate-800 rounded-2xl border border-[var(--color-border)]">
+        <div className="p-8 text-center bg-white dark:bg-slate-800 rounded-2xl border border-[var(--color-border)] no-print">
           <RefreshCw className="animate-spin mx-auto text-indigo-600" size={32} />
           <p className="mt-2 text-xs font-bold text-slate-500">جاري تحميل بيانات الشبكة السريعة...</p>
         </div>
       )}
 
       {scopeReady() && !loading && data.length === 0 && (
-        <div className="p-8 text-center opacity-60 bg-white dark:bg-slate-800 rounded-2xl border border-[var(--color-border)]">
+        <div className="p-8 text-center opacity-60 bg-white dark:bg-slate-800 rounded-2xl border border-[var(--color-border)] no-print">
           <AlertCircle className="mx-auto mb-2 text-slate-400" size={32} />
           <p className="font-bold text-slate-600 dark:text-slate-400">لا توجد جهات لعرضها في هذا النطاق</p>
         </div>
@@ -1247,7 +1266,7 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                   </>
                 )}
                 <th className="p-3 border-b border-[var(--color-border)] text-center text-slate-600 dark:text-slate-400 min-w-[70px]">إجمالي</th>
-                <th className="p-3 border-b border-[var(--color-border)] text-center text-slate-500 min-w-[110px]">الإجراءات</th>
+                <th className="p-3 border-b border-[var(--color-border)] text-center text-slate-500 min-w-[110px] no-print">الإجراءات</th>
               </tr>
               <tr>
                 <th className="p-2 border-b border-[var(--color-border)]"></th>
@@ -1309,9 +1328,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'morning_56b', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 0, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-amber-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-amber-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.morning_56b}</span>
                             </td>
 
                             {/* Cell 1: Morning 56c */}
@@ -1323,9 +1343,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'morning_56c', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 1, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-amber-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-amber-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.morning_56c}</span>
                             </td>
 
                             {/* Cell 2: Evening 56b */}
@@ -1337,9 +1358,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'evening_56b', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 2, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.evening_56b}</span>
                             </td>
 
                             {/* Cell 3: Evening 56c */}
@@ -1351,9 +1373,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'evening_56c', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 3, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.evening_56c}</span>
                             </td>
                           </>
                         ) : (
@@ -1369,9 +1392,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                     onChange={e => handleWeekInputChange(dataIndex, wi, 'morning_56b', e.target.value)}
                                     onKeyDown={e => handleKeyDown(e, dataIndex, wi * 2, maxCols)}
                                     disabled={isLocked}
-                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                     min="0"
                                   />
+                                  <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{weekCellValue(row, wi, 'morning_56b')}</span>
                                 </td>
                                 <td className="p-1">
                                   <input
@@ -1381,9 +1405,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                     onChange={e => handleWeekInputChange(dataIndex, wi, 'morning_56c', e.target.value)}
                                     onKeyDown={e => handleKeyDown(e, dataIndex, wi * 2 + 1, maxCols)}
                                     disabled={isLocked}
-                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                     min="0"
                                   />
+                                  <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{weekCellValue(row, wi, 'morning_56c')}</span>
                                 </td>
                               </React.Fragment>
                             ))}
@@ -1489,7 +1514,7 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                   </>
                 )}
                 <th className="p-3 border-b border-[var(--color-border)] text-center text-slate-600 dark:text-slate-400 min-w-[70px]">إجمالي</th>
-                <th className="p-3 border-b border-[var(--color-border)] text-center text-slate-500 min-w-[110px]">الإجراءات</th>
+                <th className="p-3 border-b border-[var(--color-border)] text-center text-slate-500 min-w-[110px] no-print">الإجراءات</th>
               </tr>
               <tr>
                 <th className="p-2 border-b border-[var(--color-border)]"></th>
@@ -1555,9 +1580,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'morning_authority', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 0, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.morning_authority}</span>
                             </td>
 
                             {/* Cell 1: Morning Students */}
@@ -1569,9 +1595,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'morning_students', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 1, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.morning_students}</span>
                             </td>
 
                             {/* Cell 2: Morning Infants */}
@@ -1583,9 +1610,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'morning_infants', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 2, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.morning_infants}</span>
                             </td>
 
                             {/* Cell 3: Evening Authority */}
@@ -1597,9 +1625,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'evening_authority', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 3, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-emerald-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-emerald-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.evening_authority}</span>
                             </td>
 
                             {/* Cell 4: Evening Students */}
@@ -1611,9 +1640,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'evening_students', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 4, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-emerald-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-emerald-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.evening_students}</span>
                             </td>
 
                             {/* Cell 5: Evening Infants */}
@@ -1625,9 +1655,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                 onChange={e => handleInputChange(dataIndex, 'evening_infants', e.target.value)}
                                 onKeyDown={e => handleKeyDown(e, dataIndex, 5, maxCols)}
                                 disabled={isLocked}
-                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-emerald-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-emerald-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                 min="0"
                               />
+                              <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{row.evening_infants}</span>
                             </td>
                           </>
                         ) : (
@@ -1643,9 +1674,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                     onChange={e => handleWeekInputChange(dataIndex, wi, 'morning_authority', e.target.value)}
                                     onKeyDown={e => handleKeyDown(e, dataIndex, wi * 3, maxCols)}
                                     disabled={isLocked}
-                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                     min="0"
                                   />
+                                  <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{weekCellValue(row, wi, 'morning_authority')}</span>
                                 </td>
                                 <td className="p-1">
                                   <input
@@ -1655,9 +1687,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                     onChange={e => handleWeekInputChange(dataIndex, wi, 'morning_students', e.target.value)}
                                     onKeyDown={e => handleKeyDown(e, dataIndex, wi * 3 + 1, maxCols)}
                                     disabled={isLocked}
-                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                     min="0"
                                   />
+                                  <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{weekCellValue(row, wi, 'morning_students')}</span>
                                 </td>
                                 <td className="p-1">
                                   <input
@@ -1667,9 +1700,10 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
                                     onChange={e => handleWeekInputChange(dataIndex, wi, 'morning_infants', e.target.value)}
                                     onKeyDown={e => handleKeyDown(e, dataIndex, wi * 3 + 2, maxCols)}
                                     disabled={isLocked}
-                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="w-full min-w-[96px] p-2.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-900/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-purple-500 text-center font-black font-mono text-[15px] text-slate-800 dark:text-slate-100 dark:focus:text-white disabled:opacity-50 disabled:cursor-not-allowed print:hidden"
                                     min="0"
                                   />
+                                  <span className="hidden print:block w-full min-w-[96px] p-2.5 text-center font-black font-mono text-[15px] text-slate-800">{weekCellValue(row, wi, 'morning_infants')}</span>
                                 </td>
                               </React.Fragment>
                             ))}
@@ -1762,7 +1796,7 @@ const QuickTicketsEntry = ({ level, dispenseMonth, onMonthChange }) => {
 
       {/* ── Summary Stats Badges ────────────────────────────────────────── */}
       {scopeReady() && !loading && data.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 no-print">
           <div className="bg-blue-50 dark:bg-blue-950/40 p-4 rounded-2xl border border-blue-200 dark:border-blue-900/40">
             <p className="text-xs text-blue-600 dark:text-blue-400 font-bold mb-1">إجمالي 56ب</p>
             <p className="text-2xl font-black font-mono text-blue-700 dark:text-blue-300">
