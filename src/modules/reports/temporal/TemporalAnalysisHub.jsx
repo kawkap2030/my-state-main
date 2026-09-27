@@ -6,6 +6,7 @@ import Card from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import PrintableTable from '../../../components/common/PrintableTable';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import Modal from '../../../components/ui/Modal';
 import MonthInput from '../../../components/ui/MonthInput';
 import AutoComplete from '../../../components/ui/AutoComplete';
@@ -148,6 +149,12 @@ const TemporalAnalysisHub = () => {
   const [data, setData] = useState([]);
   const [activeFilter, setActiveFilter] = useState('all');
   const chartRef = useRef(null);
+
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   // ── Advanced Features State ──
   const [rawRecords, setRawRecords] = useState([]);
@@ -976,6 +983,7 @@ const TemporalAnalysisHub = () => {
           description="تحليل متتقدم للمنصرف عبر فترات زمنية مخصصة مع تجميع ذكي للبيانات المالية والكمية."
           actions={
             <ExportMenu 
+              ref={exportMenuRef}
               data={filteredData} 
               columns={exportColumns}
               onCustomExport={handleCustomExport}

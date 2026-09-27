@@ -6,6 +6,7 @@ import Card from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import Table from '../../../components/ui/Table';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import { useGlobalApp } from '../../../context/useGlobalApp';
@@ -40,6 +41,11 @@ const DrugsReportPage = () => {
   const [metaData, setMetaData] = useState({ drugs: [], categories: [], branches: [], areas: [], clinics: [] });
   const [chartType, setChartType] = useState('bar');
   const chartRef = React.useRef(null);
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
    
   useEffect(() => {
@@ -423,6 +429,7 @@ const DrugsReportPage = () => {
                </button>
             </div>
             <ExportMenu 
+              ref={exportMenuRef}
               data={exportData} 
               columns={exportColumns} 
               onCustomExport={handlePremiumExport}

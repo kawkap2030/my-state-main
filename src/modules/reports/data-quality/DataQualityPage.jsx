@@ -6,6 +6,7 @@ import Button from '../../../components/ui/Button';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import PrintableTable from '../../../components/common/PrintableTable';
 import {
@@ -44,6 +45,11 @@ const DataQualityPage = () => {
   const [loading, setLoading] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState('');
   const [tab, setTab] = useState('months');
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   const load = async () => {
     setLoading(true);
@@ -163,7 +169,7 @@ const DataQualityPage = () => {
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
               <span>تحديث</span>
             </Button>
-            {data && <ExportMenu data={data.months || []} onCustomExport={handlePremiumExport} />}
+            {data && <ExportMenu ref={exportMenuRef} data={data.months || []} onCustomExport={handlePremiumExport} />}
           </div>
         }
       />
