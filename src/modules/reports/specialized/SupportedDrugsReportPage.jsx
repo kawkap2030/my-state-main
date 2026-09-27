@@ -5,6 +5,7 @@ import HierarchySelector from '../../../components/common/HierarchySelector';
 import Card from '../../../components/ui/Card';
 import Table from '../../../components/ui/Table';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { useToast } from '../../../components/ui/Toast';
 import { useGlobalApp } from '../../../context/useGlobalApp';
 import invoke from '../../../api/tauriApi';
@@ -36,6 +37,11 @@ const SupportedDrugsReportPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [metaData, setMetaData] = useState({ branches: [], areas: [], clinics: [] });
   const chartRef = React.useRef(null);
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
    
   useEffect(() => {
@@ -342,7 +348,7 @@ const SupportedDrugsReportPage = () => {
                <button onClick={() => setViewType('analytical')} className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${viewType === 'analytical' ? 'bg-white dark:bg-slate-700 shadow-sm text-sky-600' : 'text-slate-400'}`}>تحليلي</button>
                <button onClick={() => setViewType('administrative')} className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${viewType === 'administrative' ? 'bg-white dark:bg-slate-700 shadow-sm text-sky-600' : 'text-slate-400'}`}>إداري</button>
             </div>
-            <ExportMenu data={tableData} columns={viewType === 'analytical' ? analyticalColumns : administrativeColumns} onCustomExport={handlePremiumExport} options={{ title: 'تقرير الأدوية المدعمة', fileName: 'supported_drugs_report' }} />
+            <ExportMenu ref={exportMenuRef} data={tableData} columns={viewType === 'analytical' ? analyticalColumns : administrativeColumns} onCustomExport={handlePremiumExport} options={{ title: 'تقرير الأدوية المدعمة', fileName: 'supported_drugs_report' }} />
           </div>
         }
       />

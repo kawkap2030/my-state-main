@@ -6,6 +6,7 @@ import Card from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import Table from '../../../components/ui/Table';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { useToast } from '../../../components/ui/Toast';
 import { useGlobalApp } from '../../../context/useGlobalApp';
 import invoke from '../../../api/tauriApi';
@@ -40,6 +41,11 @@ const SuppliesReportPage = () => {
   const [metaData, setMetaData] = useState({ supplies: [], branches: [], areas: [], clinics: [] });
   const [chartType, setChartType] = useState('bar');
   const chartRef = React.useRef(null);
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
    
   useEffect(() => {
@@ -263,7 +269,7 @@ const SuppliesReportPage = () => {
                <button onClick={() => setViewType('analytical')} className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${viewType === 'analytical' ? 'bg-white dark:bg-slate-700 shadow-sm text-primary' : 'text-slate-400'}`}>تحليلي</button>
                <button onClick={() => setViewType('administrative')} className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${viewType === 'administrative' ? 'bg-white dark:bg-slate-700 shadow-sm text-primary' : 'text-slate-400'}`}>إداري</button>
             </div>
-            <ExportMenu data={groupedData} columns={exportColumns} onCustomExport={handlePremiumExport} options={{ title: 'تقرير المستلزمات الطبية', fileName: 'supplies_report' }} />
+            <ExportMenu ref={exportMenuRef} data={groupedData} columns={exportColumns} onCustomExport={handlePremiumExport} options={{ title: 'تقرير المستلزمات الطبية', fileName: 'supplies_report' }} />
           </div>
         }
       />

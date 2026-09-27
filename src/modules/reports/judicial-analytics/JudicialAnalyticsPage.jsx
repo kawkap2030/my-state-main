@@ -6,6 +6,7 @@ import Button from '../../../components/ui/Button';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import PrintableTable from '../../../components/common/PrintableTable';
 import {
@@ -38,6 +39,11 @@ const JudicialAnalyticsPage = () => {
   const [startMonth, setStartMonth] = useState('');
   const [endMonth, setEndMonth] = useState('');
   const [tab, setTab] = useState('patients');
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   const load = async () => {
     setLoading(true);
@@ -182,7 +188,7 @@ const JudicialAnalyticsPage = () => {
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
               <span>{loading ? 'جاري التحليل...' : 'تحليل'}</span>
             </Button>
-            {data && <ExportMenu data={data.top_patients || []} onCustomExport={handlePremiumExport} />}
+            {data && <ExportMenu ref={exportMenuRef} data={data.top_patients || []} onCustomExport={handlePremiumExport} />}
           </div>
         }
       />
