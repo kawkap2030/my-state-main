@@ -6,6 +6,7 @@ import Button from '../../../components/ui/Button';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import PrintableTable from '../../../components/common/PrintableTable';
 import { exportToWord, exportToPDF, exportMultiSheetExcel } from '../../../utils/exportUtils';
 import AutoComplete from '../../../components/ui/AutoComplete';
@@ -229,6 +230,11 @@ const SyncedTableContainer = ({ children }) => {
 const PivotReportsPage = () => {
   const toast = useToast();
   const { workspaceMode: globalWorkspaceMode, hierarchyNames: globalHierarchyNames } = useGlobalApp();
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   const [dataSource, setDataSource] = useState('detailed_drugs');
   const [startMonth, setStartMonth] = useState('');
@@ -716,6 +722,7 @@ const PivotReportsPage = () => {
         actions={
           rawData && (
             <ExportMenu
+              ref={exportMenuRef}
               data={pivotExportData}
               columns={pivotExportColumns}
               onCustomExport={handlePremiumExport}

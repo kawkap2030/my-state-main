@@ -4,6 +4,7 @@ import Breadcrumb from '../../../components/ui/Breadcrumb';
 import Card from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import AutoComplete from '../../../components/ui/AutoComplete';
 import HierarchySelector from '../../../components/common/HierarchySelector';
 import Table from '../../../components/ui/Table';
@@ -54,6 +55,11 @@ const ComparisonReportsPage = () => {
   const [hierarchyData, setHierarchyData] = useState({ branches: [], areas: [], clinics: [] });
 
   const chartRef = React.useRef(null);
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   useEffect(() => {
     (async () => {
@@ -321,6 +327,7 @@ const ComparisonReportsPage = () => {
         actions={
           data.length > 0 && (
             <ExportMenu 
+              ref={exportMenuRef}
               data={data} 
               columns={exportColumns} 
               onCustomExport={handleCustomExport}

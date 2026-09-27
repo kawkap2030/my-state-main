@@ -5,6 +5,7 @@ import HierarchySelector from '../../../components/common/HierarchySelector';
 import Card from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import PrintableTable from '../../../components/common/PrintableTable';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
@@ -72,6 +73,11 @@ const CostAnalysisPage = () => {
   const { workspaceMode, hierarchyNames } = useGlobalApp();
   const [activeTab, setActiveTab] = useState('breakdown');
   const [loading, setLoading] = useState(false);
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = useRef(null);
+  useReportPrintShortcut(exportMenuRef);
   const [selectedTime, setSelectedTime] = useState('current');
   const [customRange, setCustomRange] = useState({ from: currentMonth, to: currentMonth });
   const [hierarchy, setHierarchy] = useState({ branchId: '', areaId: '', clinicId: '' });
@@ -236,7 +242,7 @@ const CostAnalysisPage = () => {
         icon={DollarSign}
         description="تقرير تحليلي متقدم لعرض تكاليف المنصرف بجميع تصنيفاته وأعلى الأصناف استهلاكاً."
         actions={
-          <ExportMenu data={currentExportData} columns={currentExportCols}
+          <ExportMenu ref={exportMenuRef} data={currentExportData} columns={currentExportCols}
             onCustomExport={handleCustomExport}
             options={{ title: 'تحليل التكلفة الشامل', fileName: 'cost_analysis', subtitle: `النطاق الزمني: ${timeLabel}` }} />
         }
