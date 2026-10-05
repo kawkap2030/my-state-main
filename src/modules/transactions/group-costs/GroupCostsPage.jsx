@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import PageHeader from "../../../components/ui/PageHeader";
 import Breadcrumb from "../../../components/ui/Breadcrumb";
@@ -36,13 +36,15 @@ import PrintableTable from "../../../components/common/PrintableTable";
 import { buildHierarchyLabel } from "../../../utils/reportUtils";
 import StatsBar from "../../../components/common/StatsBar";
 import ExportMenu from "../../../components/ui/ExportMenu";
-import { executePrint } from "../../../utils/exportPrint";
 import useLockGuard from "../../../hooks/useLockGuard";
 
 const GroupCostsPage = () => {
   const { hierarchyNames, activeHierarchy, workspaceMode, checkIsMonthLocked } = useGlobalApp();
   const toast = useToast();
   const location = useLocation();
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the exact same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API).
+  const exportMenuRef = useRef(null);
   const [hierarchy, setHierarchy] = useState({
     branchId: location.state?.branchId || activeHierarchy.branchId || "",
     areaId: location.state?.areaId || activeHierarchy.areaId || "",
@@ -83,7 +85,7 @@ const GroupCostsPage = () => {
     {
       key: "p",
       ctrl: true,
-      handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }),
+      handler: () => exportMenuRef.current?.openPrintPreview(),
       description: "طباعة",
     },
     {
@@ -394,6 +396,7 @@ const GroupCostsPage = () => {
           <History size={18} />
           <span>آخر التكاليف المسجلة</span>
           <ExportMenu 
+            ref={exportMenuRef}
             data={displayHistory} 
             columns={[
               { header: "الشهر", accessor: "dispense_month" },

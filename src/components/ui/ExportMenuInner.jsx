@@ -438,6 +438,7 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
           signatures={finalOptions.signatures || {}}
           exportData={data}
           exportColumns={columns}
+          tables={finalOptions.tables}
         >
           {/* Preview content — the actual data rendered as a table or multi-tables */}
           {finalOptions.tables && finalOptions.tables.length > 0 ? (

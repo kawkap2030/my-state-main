@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import PageHeader from "../../../components/ui/PageHeader";
 import Breadcrumb from "../../../components/ui/Breadcrumb";
@@ -45,7 +45,6 @@ import ExcelImportWizard from "../../../components/common/ExcelImportWizard";
 import ExportMenu from "../../../components/ui/ExportMenu";
 import { FileSpreadsheet } from "lucide-react";
 import { useAuth } from "../../../context/AuthContext";
-import { executePrint } from "../../../utils/exportPrint";
 import useLockGuard from "../../../hooks/useLockGuard";
 
 const DetailedDrugDispensingPage = () => {
@@ -53,6 +52,9 @@ const DetailedDrugDispensingPage = () => {
   const location = useLocation();
   const { user } = useAuth();
   const { activeHierarchy, hierarchyNames, workspaceMode, checkIsMonthLocked } = useGlobalApp();
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the exact same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API).
+  const exportMenuRef = useRef(null);
   const [hierarchy, setHierarchy] = useState({
     branchId: location.state?.branchId || activeHierarchy.branchId || "",
     areaId: location.state?.areaId || activeHierarchy.areaId || "",
@@ -113,7 +115,7 @@ const DetailedDrugDispensingPage = () => {
     {
       key: "p",
       ctrl: true,
-      handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }),
+      handler: () => exportMenuRef.current?.openPrintPreview(),
       description: "طباعة",
     },
     {
@@ -1097,6 +1099,7 @@ const groupedRows = useMemo(() => {
             <span>سجلات الصرف المحفوظة</span>
 
             <ExportMenu 
+              ref={exportMenuRef}
               data={displayHistory} 
               columns={exportColumns} 
               options={{ 

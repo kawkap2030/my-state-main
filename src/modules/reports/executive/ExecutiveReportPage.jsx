@@ -8,6 +8,7 @@ import PrintableTable from '../../../components/common/PrintableTable';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { exportToWord, exportToPDF, exportMultiSheetExcel } from '../../../utils/exportUtils';
 import { toPng } from 'html-to-image';
 import { 
@@ -48,6 +49,8 @@ const ExecutiveReportPage = () => {
   const printAreaRef = useRef(null);
   const pieChartRef = useRef(null);
   const barChartRef = useRef(null);
+  const exportMenuRef = useRef(null);
+  useReportPrintShortcut(exportMenuRef);
   const [costPieImage, setCostPieImage] = useState(null);
   const [comparisonBarImage, setComparisonBarImage] = useState(null);
 
@@ -165,36 +168,97 @@ const ExecutiveReportPage = () => {
     ].filter(item => item.value > 0);
   }, [data]);
 
+  const { exportColumns, summaryRows, topDrugsCols, topDrugsRows, topInsulinCols, topInsulinRows, multiTables } = useMemo(() => {
+    if (!data) {
+      return {
+        exportColumns: [],
+        summaryRows: [],
+        topDrugsCols: [],
+        topDrugsRows: [],
+        topInsulinCols: [],
+        topInsulinRows: [],
+        multiTables: [],
+      };
+    }
+
+    // 1. Prepare Executive Summary sheet rows and columns
+    const exportColumns = [];
+    if (visibleCols.item) exportColumns.push({ header: 'البند المالي الإحصائي', accessor: 'item' });
+    if (visibleCols.cases) exportColumns.push({ header: 'الحالات / العدد', accessor: 'cases' });
+    if (visibleCols.cost) exportColumns.push({ header: 'التكلفة والمنصرف المالي', accessor: 'cost' });
+
+    const summaryRows = [];
+    const addRow = (itemLabel, casesVal, costVal) => {
+      const row = {};
+      if (visibleCols.item) row.item = itemLabel;
+      if (visibleCols.cases) row.cases = casesVal;
+      if (visibleCols.cost) row.cost = costVal;
+      summaryRows.push(row);
+    };
+
+    addRow('منصرف الأدوية التفصيلي', `${data.drug_cases.toLocaleString()}`, `${data.drug_cost.toLocaleString()} ج.م`);
+    addRow('منصرف الأنسولين', `${data.insulin_cases.toLocaleString()}`, `${data.insulin_cost.toLocaleString()} ج.م`);
+    addRow('المستلزمات الطبية', '--', `${data.supply_cost.toLocaleString()} ج.م`);
+    addRow('صرف الأحكام القضائية', `${data.judicial_cases.toLocaleString()}`, `${data.judicial_cost.toLocaleString()} ج.م`);
+    addRow('إجمالي الأدوية المجانية (مساهمة الهيئة الكاملة)', '--', `${data.free_drugs_cost.toLocaleString()} ج.م`);
+    addRow('إجمالي الأدوية المدعمة (قيمة مشاركة الهيئة)', '--', `${data.supported_drugs_cost.toLocaleString()} ج.م`);
+    addRow('إجمالي المبالغ المحصلة (حصة المريض)', '--', `${data.patient_share.toLocaleString()} ج.م`);
+    addRow('تذاكر طبية 56ب', `${data.tickets_56b.toLocaleString()} تذكرة`, '--');
+    addRow('تذاكر طبية 56ج', `${data.tickets_56c.toLocaleString()} تذكرة`, '--');
+    addRow('المجموع الكلي للإنفاق', `${data.total_cases.toLocaleString()}`, `${data.total_cost.toLocaleString()} ج.م`);
+
+    // 2. Prepare Detailed tables rows and columns
+    const topDrugsCols = [
+      { header: 'اسم الصنف الدوائي', accessor: 'name' },
+      { header: 'الكمية المنصرفة', accessor: 'quantity' },
+      { header: 'عدد الحالات', accessor: 'cases' },
+      { header: 'التكلفة الإجمالية', accessor: 'cost' }
+    ];
+    const topDrugsRows = (data.top_drugs || []).map(d => ({
+      name: d.name,
+      quantity: d.quantity.toLocaleString(),
+      cases: d.cases.toLocaleString(),
+      cost: `${d.cost.toLocaleString()} ج.م`
+    }));
+
+    const topInsulinCols = [
+      { header: 'نوع الإنسولين', accessor: 'name' },
+      { header: 'الكمية المنصرفة', accessor: 'quantity' },
+      { header: 'عدد الحالات', accessor: 'cases' },
+      { header: 'التكلفة الإجمالية', accessor: 'cost' }
+    ];
+    const topInsulinRows = (data.top_insulin || []).map(ins => ({
+      name: ins.name,
+      quantity: ins.quantity.toLocaleString(),
+      cases: ins.cases.toLocaleString(),
+      cost: `${ins.cost.toLocaleString()} ج.م`
+    }));
+
+    const multiTables = [
+      { data: summaryRows, columns: exportColumns, title: 'الملخص المالي' },
+    ];
+    if (topDrugsRows.length > 0) {
+      multiTables.push({ data: topDrugsRows, columns: topDrugsCols, title: 'الأدوية الأكثر استهلاكاً' });
+    }
+    if (topInsulinRows.length > 0) {
+      multiTables.push({ data: topInsulinRows, columns: topInsulinCols, title: 'الإنسولين الأكثر استهلاكاً' });
+    }
+
+    return {
+      exportColumns,
+      summaryRows,
+      topDrugsCols,
+      topDrugsRows,
+      topInsulinCols,
+      topInsulinRows,
+      multiTables,
+    };
+  }, [data, visibleCols]);
+
   // Premium Export Handler
   const handlePremiumExport = async (type, { options }) => {
     if (!data) return false;
     try {
-      // 1. Prepare Executive Summary sheet rows and columns
-      const exportColumns = [];
-      if (visibleCols.item) exportColumns.push({ header: 'البند المالي الإحصائي', accessor: 'item' });
-      if (visibleCols.cases) exportColumns.push({ header: 'الحالات / العدد', accessor: 'cases' });
-      if (visibleCols.cost) exportColumns.push({ header: 'التكلفة والمنصرف المالي', accessor: 'cost' });
-
-      const summaryRows = [];
-      const addRow = (itemLabel, casesVal, costVal) => {
-        const row = {};
-        if (visibleCols.item) row.item = itemLabel;
-        if (visibleCols.cases) row.cases = casesVal;
-        if (visibleCols.cost) row.cost = costVal;
-        summaryRows.push(row);
-      };
-      
-      addRow('منصرف الأدوية التفصيلي', `${data.drug_cases.toLocaleString()}`, `${data.drug_cost.toLocaleString()} ج.م`);
-      addRow('منصرف الأنسولين', `${data.insulin_cases.toLocaleString()}`, `${data.insulin_cost.toLocaleString()} ج.م`);
-      addRow('المستلزمات الطبية', '--', `${data.supply_cost.toLocaleString()} ج.م`);
-      addRow('صرف الأحكام القضائية', `${data.judicial_cases.toLocaleString()}`, `${data.judicial_cost.toLocaleString()} ج.م`);
-      addRow('إجمالي الأدوية المجانية (مساهمة الهيئة الكاملة)', '--', `${data.free_drugs_cost.toLocaleString()} ج.م`);
-      addRow('إجمالي الأدوية المدعمة (قيمة مشاركة الهيئة)', '--', `${data.supported_drugs_cost.toLocaleString()} ج.م`);
-      addRow('إجمالي المبالغ المحصلة (حصة المريض)', '--', `${data.patient_share.toLocaleString()} ج.م`);
-      addRow('تذاكر طبية 56ب', `${data.tickets_56b.toLocaleString()} تذكرة`, '--');
-      addRow('تذاكر طبية 56ج', `${data.tickets_56c.toLocaleString()} تذكرة`, '--');
-      addRow('المجموع الكلي للإنفاق', `${data.total_cases.toLocaleString()}`, `${data.total_cost.toLocaleString()} ج.م`);
-
       // Use pre-captured chart image
       const chartImage = costPieImage;
 
@@ -204,33 +268,6 @@ const ExecutiveReportPage = () => {
         fileName: 'executive_summary_report',
         chartImage
       };
-
-      // 2. Prepare Detailed tables rows and columns
-      const topDrugsCols = [
-        { header: 'اسم الصنف الدوائي', accessor: 'name' },
-        { header: 'الكمية المنصرفة', accessor: 'quantity' },
-        { header: 'عدد الحالات', accessor: 'cases' },
-        { header: 'التكلفة الإجمالية', accessor: 'cost' }
-      ];
-      const topDrugsRows = (data.top_drugs || []).map(d => ({
-        name: d.name,
-        quantity: d.quantity.toLocaleString(),
-        cases: d.cases.toLocaleString(),
-        cost: `${d.cost.toLocaleString()} ج.م`
-      }));
-
-      const topInsulinCols = [
-        { header: 'نوع الإنسولين', accessor: 'name' },
-        { header: 'الكمية المنصرفة', accessor: 'quantity' },
-        { header: 'عدد الحالات', accessor: 'cases' },
-        { header: 'التكلفة الإجمالية', accessor: 'cost' }
-      ];
-      const topInsulinRows = (data.top_insulin || []).map(ins => ({
-        name: ins.name,
-        quantity: ins.quantity.toLocaleString(),
-        cases: ins.cases.toLocaleString(),
-        cost: `${ins.cost.toLocaleString()} ج.م`
-      }));
 
       // Excel Premium multi-sheet export
       if (type === 'excel') {
@@ -252,16 +289,6 @@ const ExecutiveReportPage = () => {
       }
 
       // Word & PDF: mirror the Excel sheets as separate titled tables
-      const multiTables = [
-        { data: summaryRows, columns: exportColumns, title: 'الملخص المالي' },
-      ];
-      if (topDrugsRows.length > 0) {
-        multiTables.push({ data: topDrugsRows, columns: topDrugsCols, title: 'الأدوية الأكثر استهلاكاً' });
-      }
-      if (topInsulinRows.length > 0) {
-        multiTables.push({ data: topInsulinRows, columns: topInsulinCols, title: 'الإنسولين الأكثر استهلاكاً' });
-      }
-
       const unifiedOptions = {
         ...exportOptions,
         title: 'التقرير التنفيذي الشامل والمفصل',
@@ -296,12 +323,14 @@ const ExecutiveReportPage = () => {
         actions={
           data && (
             <ExportMenu
-              data={data}
-              columns={[]}
+              ref={exportMenuRef}
+              data={summaryRows}
+              columns={exportColumns}
               onCustomExport={handlePremiumExport}
               options={{
                 title: 'التقرير التنفيذي الموحد',
-                fileName: 'executive_summary_report'
+                fileName: 'executive_summary_report',
+                tables: multiTables
               }}
             />
           )
@@ -348,7 +377,7 @@ const ExecutiveReportPage = () => {
                 <DollarSign size={100} />
               </div>
               <span className="text-[10px] font-bold opacity-60">التكلفة الكلية للمنصرف</span>
-              <h2 className="text-3xl font-black mt-2">{data.total_cost.toLocaleString()} <span className="text-xs font-normal opacity-70">ج.م</span></h2>
+              <h2 className="text-3xl font-black mt-2 break-words">{data.total_cost.toLocaleString().replace(/([,\u066C])/g, '$1\u200B')} <span className="text-xs font-normal opacity-70">ج.م</span></h2>
               <div className="mt-4 flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
                 <span className="text-[10px] opacity-75">أدوية + أنسولين + مستلزمات + أحكام</span>

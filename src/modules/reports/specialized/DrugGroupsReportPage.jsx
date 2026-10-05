@@ -6,6 +6,7 @@ import Card from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import Table from '../../../components/ui/Table';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import { useGlobalApp } from '../../../context/useGlobalApp';
@@ -37,6 +38,11 @@ const DrugGroupsReportPage = () => {
   });
   const [metaData, setMetaData] = useState({ groups: [], branches: [], areas: [], clinics: [] });
   const chartRef = React.useRef(null);
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   useEffect(() => {
     loadMeta();
@@ -274,7 +280,7 @@ const DrugGroupsReportPage = () => {
                <button onClick={() => setViewType('analytical')} className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${viewType === 'analytical' ? 'bg-white dark:bg-slate-700 shadow-sm text-primary' : 'text-slate-400'}`}>تحليلي</button>
                <button onClick={() => setViewType('administrative')} className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${viewType === 'administrative' ? 'bg-white dark:bg-slate-700 shadow-sm text-primary' : 'text-slate-400'}`}>إداري</button>
             </div>
-            <ExportMenu data={groupedData} columns={exportColumns} onCustomExport={handlePremiumExport} options={{ title: 'تقرير المجموعات الدوائية', fileName: 'drug_groups_report' }} />
+            <ExportMenu ref={exportMenuRef} data={groupedData} columns={exportColumns} onCustomExport={handlePremiumExport} options={{ title: 'تقرير المجموعات الدوائية', fileName: 'drug_groups_report' }} />
           </div>
         }
       />

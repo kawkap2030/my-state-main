@@ -8,6 +8,8 @@ import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import ExportMenu from '../../../components/ui/ExportMenu';
 import PrintableTable from '../../../components/common/PrintableTable';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
+import { useGlobalApp } from '../../../context/useGlobalApp';
 import { exportToWord, exportToPDF, exportMultiSheetExcel } from '../../../utils/exportUtils';
 import { toPng } from 'html-to-image';
 import { 
@@ -38,6 +40,7 @@ const COLUMN_DEFS = [
 
 const DemographicReportPage = () => {
   const toast = useToast();
+  const { activeHierarchy } = useGlobalApp();
   const [hierarchy, setHierarchy] = useState({
     branchId: '', areaId: '', clinicId: ''
   });
@@ -52,6 +55,9 @@ const DemographicReportPage = () => {
   const [showColPicker, setShowColPicker] = useState(false);
   const chartRef = useRef(null);
   const [chartImage, setChartImage] = useState(null);
+
+  const exportMenuRef = useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   // Auto-capture chart image after data loads for print/export
   React.useEffect(() => {
@@ -180,70 +186,83 @@ const DemographicReportPage = () => {
     });
   }, [data]);
 
+  const { summaryCols, summaryExportRows, exportColumns, exportRows, multiTables } = useMemo(() => {
+    const cols = [];
+    if (visibleCols.month) cols.push({ header: 'الشهر', accessor: 'month' });
+    if (visibleCols.free_auth) cols.push({ header: 'هيئة - مجاني', accessor: 'free_auth' });
+    if (visibleCols.sup_auth) cols.push({ header: 'هيئة - مدعم (هيئة)', accessor: 'sup_auth' });
+    if (visibleCols.share_auth) cols.push({ header: 'هيئة - حصة المريض', accessor: 'share_auth' });
+    if (visibleCols.free_stud) cols.push({ header: 'طلاب - مجاني', accessor: 'free_stud' });
+    if (visibleCols.sup_stud) cols.push({ header: 'طلاب - مدعم (هيئة)', accessor: 'sup_stud' });
+    if (visibleCols.share_stud) cols.push({ header: 'طلاب - حصة المريض', accessor: 'share_stud' });
+    if (visibleCols.free_inf) cols.push({ header: 'رضع - مجاني', accessor: 'free_inf' });
+    if (visibleCols.sup_inf) cols.push({ header: 'رضع - مدعم (هيئة)', accessor: 'sup_inf' });
+    if (visibleCols.share_inf) cols.push({ header: 'رضع - حصة المريض', accessor: 'share_inf' });
+    if (visibleCols.free_wom) cols.push({ header: 'معيلات - مجاني', accessor: 'free_wom' });
+    if (visibleCols.total) cols.push({ header: 'إجمالي المنصرف المالي', accessor: 'total' });
+
+    const rows = data.map(row => {
+      const item = {};
+      if (visibleCols.month) item.month = row.month;
+      if (visibleCols.free_auth) item.free_auth = row.free_authority;
+      if (visibleCols.sup_auth) item.sup_auth = row.sup_authority_val;
+      if (visibleCols.share_auth) item.share_auth = row.sup_authority_share;
+      if (visibleCols.free_stud) item.free_stud = row.free_students;
+      if (visibleCols.sup_stud) item.sup_stud = row.sup_students_val;
+      if (visibleCols.share_stud) item.share_stud = row.sup_students_share;
+      if (visibleCols.free_inf) item.free_inf = row.free_infants;
+      if (visibleCols.sup_inf) item.sup_inf = row.sup_infants_val;
+      if (visibleCols.share_inf) item.share_inf = row.sup_infants_share;
+      if (visibleCols.free_wom) item.free_wom = row.free_women;
+      if (visibleCols.total) {
+        const auth = row.free_authority + row.sup_authority_val + row.sup_authority_share;
+        const stud = row.free_students + row.sup_students_val + row.sup_students_share;
+        const inf = row.free_infants + row.sup_infants_val + row.sup_infants_share;
+        const wom = row.free_women;
+        item.total = auth + stud + inf + wom;
+      }
+      return item;
+    });
+
+    const sCols = [
+      { header: 'الفئة الاجتماعية', accessor: 'category' },
+      { header: 'إجمالي المجاني (ج.م)', accessor: 'free' },
+      { header: 'إجمالي المدعم (ج.م)', accessor: 'sup' },
+      { header: 'حصة المريض (ج.م)', accessor: 'share' },
+      { header: 'الإجمالي الكلي (ج.م)', accessor: 'total' }
+    ];
+    const sRows = [
+      { category: 'العاملين بالهيئة', free: summaries.authority.free.toLocaleString(), sup: summaries.authority.sup.toLocaleString(), share: summaries.authority.share.toLocaleString(), total: summaries.authority.total.toLocaleString() },
+      { category: 'الطلاب', free: summaries.students.free.toLocaleString(), sup: summaries.students.sup.toLocaleString(), share: summaries.students.share.toLocaleString(), total: summaries.students.total.toLocaleString() },
+      { category: 'الأطفال الرضع', free: summaries.infants.free.toLocaleString(), sup: summaries.infants.sup.toLocaleString(), share: summaries.infants.share.toLocaleString(), total: summaries.infants.total.toLocaleString() },
+      { category: 'المرأة المعيلة', free: summaries.women.free.toLocaleString(), sup: '--', share: '--', total: summaries.women.total.toLocaleString() },
+      { category: 'الإجمالي العام', free: summaries.totalFree.toLocaleString(), sup: summaries.totalSupported.toLocaleString(), share: summaries.totalShare.toLocaleString(), total: summaries.grandTotal.toLocaleString() }
+    ];
+
+    return {
+      summaryCols: sCols,
+      summaryExportRows: sRows,
+      exportColumns: cols,
+      exportRows: rows,
+      multiTables: [
+        { data: sRows, columns: sCols, title: 'ملخص الفئات الاجتماعية' },
+        { data: rows, columns: cols, title: 'تفاصيل البيانات الشهرية' },
+      ],
+    };
+  }, [data, visibleCols, summaries]);
+
   // Premium Export Handler
   const handlePremiumExport = async (type, { options }) => {
     if (data.length === 0) return false;
     try {
-      const exportColumns = [];
-      if (visibleCols.month) exportColumns.push({ header: 'الشهر', accessor: 'month' });
-      if (visibleCols.free_auth) exportColumns.push({ header: 'هيئة - مجاني', accessor: 'free_auth' });
-      if (visibleCols.sup_auth) exportColumns.push({ header: 'هيئة - مدعم (هيئة)', accessor: 'sup_auth' });
-      if (visibleCols.share_auth) exportColumns.push({ header: 'هيئة - حصة المريض', accessor: 'share_auth' });
-      if (visibleCols.free_stud) exportColumns.push({ header: 'طلاب - مجاني', accessor: 'free_stud' });
-      if (visibleCols.sup_stud) exportColumns.push({ header: 'طلاب - مدعم (هيئة)', accessor: 'sup_stud' });
-      if (visibleCols.share_stud) exportColumns.push({ header: 'طلاب - حصة المريض', accessor: 'share_stud' });
-      if (visibleCols.free_inf) exportColumns.push({ header: 'رضع - مجاني', accessor: 'free_inf' });
-      if (visibleCols.sup_inf) exportColumns.push({ header: 'رضع - مدعم (هيئة)', accessor: 'sup_inf' });
-      if (visibleCols.share_inf) exportColumns.push({ header: 'رضع - حصة المريض', accessor: 'share_inf' });
-      if (visibleCols.free_wom) exportColumns.push({ header: 'معيلات - مجاني', accessor: 'free_wom' });
-      if (visibleCols.total) exportColumns.push({ header: 'إجمالي المنصرف المالي', accessor: 'total' });
-
-      const exportRows = data.map(row => {
-        const item = {};
-        if (visibleCols.month) item.month = row.month;
-        if (visibleCols.free_auth) item.free_auth = row.free_authority;
-        if (visibleCols.sup_auth) item.sup_auth = row.sup_authority_val;
-        if (visibleCols.share_auth) item.share_auth = row.sup_authority_share;
-        if (visibleCols.free_stud) item.free_stud = row.free_students;
-        if (visibleCols.sup_stud) item.sup_stud = row.sup_students_val;
-        if (visibleCols.share_stud) item.share_stud = row.sup_students_share;
-        if (visibleCols.free_inf) item.free_inf = row.free_infants;
-        if (visibleCols.sup_inf) item.sup_inf = row.sup_infants_val;
-        if (visibleCols.share_inf) item.share_inf = row.sup_infants_share;
-        if (visibleCols.free_wom) item.free_wom = row.free_women;
-        if (visibleCols.total) {
-          const auth = row.free_authority + row.sup_authority_val + row.sup_authority_share;
-          const stud = row.free_students + row.sup_students_val + row.sup_students_share;
-          const inf = row.free_infants + row.sup_infants_val + row.sup_infants_share;
-          const wom = row.free_women;
-          item.total = auth + stud + inf + wom;
-        }
-        return item;
-      });
-
       // Use pre-captured chart image
       const exportOptions = {
         ...options,
         title: 'تقرير توزيع المنصرف حسب الفئات المستفيدة',
         fileName: 'demographic_dispense_report',
-        chartImage
+        chartImage,
+        subtitle: ''
       };
-
-      // Build summary sheet (shared by Excel multi-sheet and Word/PDF tables)
-      const summaryCols = [
-        { header: 'الفئة الاجتماعية', accessor: 'category' },
-        { header: 'إجمالي المجاني (ج.م)', accessor: 'free' },
-        { header: 'إجمالي المدعم (ج.م)', accessor: 'sup' },
-        { header: 'حصة المريض (ج.م)', accessor: 'share' },
-        { header: 'الإجمالي الكلي (ج.م)', accessor: 'total' }
-      ];
-      const summaryExportRows = [
-        { category: 'العاملين بالهيئة', free: summaries.authority.free.toLocaleString(), sup: summaries.authority.sup.toLocaleString(), share: summaries.authority.share.toLocaleString(), total: summaries.authority.total.toLocaleString() },
-        { category: 'الطلاب', free: summaries.students.free.toLocaleString(), sup: summaries.students.sup.toLocaleString(), share: summaries.students.share.toLocaleString(), total: summaries.students.total.toLocaleString() },
-        { category: 'الأطفال الرضع', free: summaries.infants.free.toLocaleString(), sup: summaries.infants.sup.toLocaleString(), share: summaries.infants.share.toLocaleString(), total: summaries.infants.total.toLocaleString() },
-        { category: 'المرأة المعيلة', free: summaries.women.free.toLocaleString(), sup: '--', share: '--', total: summaries.women.total.toLocaleString() },
-        { category: 'الإجمالي العام', free: summaries.totalFree.toLocaleString(), sup: summaries.totalSupported.toLocaleString(), share: summaries.totalShare.toLocaleString(), total: summaries.grandTotal.toLocaleString() }
-      ];
 
       if (type === 'excel') {
         const sheetsData = {
@@ -258,10 +277,6 @@ const DemographicReportPage = () => {
         return true;
       }
       // Word/PDF: mirror the Excel sheets as separate titled tables
-      const multiTables = [
-        { data: summaryExportRows, columns: summaryCols, title: 'ملخص الفئات الاجتماعية' },
-        { data: exportRows, columns: exportColumns, title: 'تفاصيل البيانات الشهرية' },
-      ];
       const wordPdfOptions = { ...exportOptions, tables: multiTables };
       if (type === 'word') {
         exportToWord(summaryExportRows, summaryCols, wordPdfOptions);
@@ -290,12 +305,16 @@ const DemographicReportPage = () => {
         actions={
           data.length > 0 && (
             <ExportMenu
+              ref={exportMenuRef}
               data={data}
               columns={[]}
               onCustomExport={handlePremiumExport}
               options={{
                 title: 'تقرير توزيع المنصرف حسب الفئات المستفيدة',
-                fileName: 'demographic_dispense_report'
+                fileName: 'demographic_dispense_report',
+                subtitle: `الفترة: من ${range.start} إلى ${range.end}`,
+                month: activeHierarchy?.dispenseMonth || '',
+                tables: multiTables
               }}
             />
           )

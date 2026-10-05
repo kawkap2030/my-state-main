@@ -6,6 +6,7 @@ import Card from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import Table from '../../../components/ui/Table';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import AutoComplete from '../../../components/ui/AutoComplete';
 import { useToast } from '../../../components/ui/Toast';
 import { useGlobalApp } from '../../../context/useGlobalApp';
@@ -43,6 +44,11 @@ const InsulinReportPage = () => {
   const [metaData, setMetaData] = useState({ categories: [], types: [], branches: [], areas: [], clinics: [] });
   const [chartType, setChartType] = useState('bar');
   const chartRef = React.useRef(null);
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the EXACT same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API, no native
+  // WebView2 print dialog, no window.print() path).
+  const exportMenuRef = React.useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
    
   useEffect(() => {
@@ -246,7 +252,7 @@ const InsulinReportPage = () => {
     }
   ];
 
-  const exportColumns = [
+  const exportColumns = useMemo(() => ([
     { header: 'نوع الإنسولين', exportAccessor: (r) => r.name },
     { header: 'النوع', exportAccessor: (r) => r.type_ },
     { header: 'الفئة', exportAccessor: (r) => r.category },
@@ -254,7 +260,7 @@ const InsulinReportPage = () => {
     { header: 'الكمية', exportAccessor: (r) => r.quantity },
     { header: 'السعر', exportAccessor: (r) => r.price },
     { header: 'التكلفة', exportAccessor: (r) => r.cost },
-  ];
+  ]), []);
 
   // ── Collapse/Expand Groups ────────────────────────────────────────────
   const STORAGE_KEY = 'collapsed-insulin-report';
@@ -358,6 +364,27 @@ const InsulinReportPage = () => {
     return Object.entries(typeMap).map(([name, cost]) => ({ name, cost }));
   }, [filteredData]);
 
+  // Word/PDF: summary table + detail table (like the premium Excel export).
+  // Kept outside handlePremiumExport because ExportMenu also reads
+  // options.tables to build the print preview — otherwise the printed report
+  // would show only the detail table while Word/PDF show both.
+  const premiumTables = useMemo(() => ([
+    {
+      data: [
+        { indicator: 'إجمالي التكلفة', val: `${stats.totalCost.toLocaleString()} ج.م` },
+        { indicator: 'إجمالي الحالات', val: `${stats.totalCases.toLocaleString()} حالة` },
+        { indicator: 'إجمالي الكميات', val: `${stats.totalQty.toLocaleString()} عبوة` },
+        { indicator: 'النوع الأكثر طلباً', val: stats.topInsulin.name },
+      ],
+      columns: [
+        { header: 'المؤشر', accessor: 'indicator' },
+        { header: 'القيمة', accessor: 'val' },
+      ],
+      title: 'ملخص التقرير',
+    },
+    { data: exportData, columns: exportColumns, title: 'تفاصيل صرف الإنسولين' },
+  ]), [stats, exportData, exportColumns]);
+
   const handlePremiumExport = async (type, { data, options }) => {
     try {
       let chartImage = null;
@@ -387,22 +414,7 @@ const InsulinReportPage = () => {
         toast.success('تم تصدير ملف Excel بنجاح');
         return true;
       }
-      // Word/PDF: summary table + detail table (like the premium Excel export)
-      const summaryTable = {
-        data: [
-          { indicator: 'إجمالي التكلفة', val: `${stats.totalCost.toLocaleString()} ج.م` },
-          { indicator: 'إجمالي الحالات', val: `${stats.totalCases.toLocaleString()} حالة` },
-          { indicator: 'إجمالي الكميات', val: `${stats.totalQty.toLocaleString()} عبوة` },
-          { indicator: 'النوع الأكثر طلباً', val: stats.topInsulin.name },
-        ],
-        columns: [
-          { header: 'المؤشر', accessor: 'indicator' },
-          { header: 'القيمة', accessor: 'val' },
-        ],
-        title: 'ملخص التقرير',
-      };
-      const multiTables = [summaryTable, { data, columns: exportColumns, title: 'تفاصيل صرف الإنسولين' }];
-      const wordPdfOptions = { ...enrichedOptions, tables: multiTables };
+      const wordPdfOptions = { ...enrichedOptions, tables: premiumTables };
       if (type === 'word') { await exportToWord(data, exportColumns, wordPdfOptions); toast.success('تم تصدير ملف Word بنجاح'); return true; }
       if (type === 'pdf') { await exportToPDF(data, exportColumns, wordPdfOptions); toast.success('تم تصدير ملف PDF بنجاح'); return true; }
       return false;
@@ -425,10 +437,11 @@ const InsulinReportPage = () => {
                <button onClick={() => setViewType('administrative')} className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${viewType === 'administrative' ? 'bg-white dark:bg-slate-700 shadow-sm text-primary' : 'text-slate-400'}`}>إداري</button>
             </div>
             <ExportMenu 
+              ref={exportMenuRef}
               data={exportData} 
               columns={exportColumns} 
               onCustomExport={handlePremiumExport}
-              options={{ title: 'تقرير صرف الإنسولين التفصيلي', fileName: 'insulin_detailed_report' }} 
+              options={{ title: 'تقرير صرف الإنسولين التفصيلي', fileName: 'insulin_detailed_report', tables: premiumTables }} 
             />
           </div>
         }

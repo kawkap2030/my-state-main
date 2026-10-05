@@ -42,6 +42,7 @@ const PrintPreviewModal = ({
   onPrint,
   exportData = null,      // raw data array for PDF export (optional)
   exportColumns = null,   // [{header, accessor}] for PDF export (optional)
+  tables = null,
 }) => {
   const [orientation, setOrientation] = useState('landscape');
   const [fontSize, setFontSize] = useState('md');
@@ -397,6 +398,7 @@ const PrintPreviewModal = ({
                   showPageNumbers,
                   showSignatures,
                   signatures: mergedSignatures,
+                  ...(tables && tables.length > 0 ? { tables } : {}),
                 });
                 toast.success('تم تصدير التقرير كـ PDF بنجاح ✅');
               } catch (err) {

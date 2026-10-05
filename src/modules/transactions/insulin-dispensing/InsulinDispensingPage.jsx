@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import PageHeader from '../../../components/ui/PageHeader';
 import Breadcrumb from '../../../components/ui/Breadcrumb';
@@ -25,7 +25,6 @@ import StatsBar from '../../../components/common/StatsBar';
 import PrintableTable from '../../../components/common/PrintableTable';
 import { buildHierarchyLabel } from '../../../utils/reportUtils';
 import ExportMenu from '../../../components/ui/ExportMenu';
-import { executePrint } from '../../../utils/exportPrint';
 import useKeyboardShortcuts from '../../../hooks/useKeyboardShortcuts';
 import useLockGuard from '../../../hooks/useLockGuard';
 
@@ -45,6 +44,9 @@ const InsulinDispensingPage = () => {
   const { activeHierarchy, hierarchyNames, workspaceMode, checkIsMonthLocked } = useGlobalApp();
   const toast = useToast();
   const location = useLocation();
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the exact same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API).
+  const exportMenuRef = useRef(null);
   
   const [hierarchy, setHierarchy] = useState({
     branchId: location.state?.branchId || activeHierarchy.branchId || '',
@@ -140,7 +142,7 @@ const InsulinDispensingPage = () => {
     {
       key: 'p',
       ctrl: true,
-      handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }),
+      handler: () => exportMenuRef.current?.openPrintPreview(),
       description: 'طباعة'
     },
     {
@@ -1054,6 +1056,7 @@ const InsulinDispensingPage = () => {
                   <History size={18} className="text-primary" />
                   <span>سجلات صرف الأنسولين</span>
                   <ExportMenu 
+                    ref={exportMenuRef}
                     data={displayHistory} 
                     columns={insulinExportColumns}
                     options={{ 
@@ -1264,51 +1267,50 @@ const InsulinDispensingPage = () => {
                 subtitle={`الشهر: ${hierarchy.dispenseMonth}`}
                 hierarchyLabel={buildHierarchyLabel(workspaceMode, hierarchyNames)}
               >
-                <table className="w-full text-right border-collapse border border-black text-[10px]">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-black">
-                      <th className="p-2 border border-black">الصنف</th>
-                      <th className="p-2 border border-black text-center">الكمية</th>
-                      <th className="p-2 border border-black text-center">عدد الحالات</th>
-                      <th className="p-2 border border-black text-center">سعر الوحدة</th>
-                      <th className="p-2 border border-black text-center">القيمة</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayHistory.map((reg) => (
-                      <tr key={reg.id} className="border-b border-black">
-                        <td className="p-2 border border-black font-bold">{reg.name}</td>
-                        <td className="p-2 border border-black text-center">{reg.quantity} {reg.unit}</td>
-                        <td className="p-2 border border-black text-center">{reg.cases_count}</td>
-                        <td className="p-2 border border-black text-center">{parseFloat(reg.price || 0).toFixed(2)}</td>
-                        <td className="p-2 border border-black text-center font-bold">{parseFloat(reg.cost || 0).toFixed(2)} ج.م</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="font-bold border-t border-black">
-                      <td className="p-2 text-right">المدعم ({stats.filteredByType.subsidized.count} سجل):</td>
-                      <td className="p-2 text-center border border-black">{stats.filteredByType.subsidized.qty.toLocaleString()}</td>
-                      <td className="p-2 text-center border border-black">{stats.filteredByType.subsidized.cases.toLocaleString()}</td>
-                      <td className="p-2 border border-black"></td>
-                      <td className="p-2 text-center border border-black">{stats.filteredByType.subsidized.cost.toLocaleString()} ج.م</td>
-                    </tr>
-                    <tr className="font-bold border-t border-black">
-                      <td className="p-2 text-right">المجاني ({stats.filteredByType.free.count} سجل):</td>
-                      <td className="p-2 text-center border border-black">{stats.filteredByType.free.qty.toLocaleString()}</td>
-                      <td className="p-2 text-center border border-black">{stats.filteredByType.free.cases.toLocaleString()}</td>
-                      <td className="p-2 border border-black"></td>
-                      <td className="p-2 text-center border border-black">{stats.filteredByType.free.cost.toLocaleString()} ج.م</td>
-                    </tr>
-                    <tr className="font-bold border-t-2 border-black bg-slate-50">
-                      <td className="p-2 text-right">الإجمالي العام ({stats.filtered.count} سجل):</td>
-                      <td className="p-2 text-center border border-black">{stats.filtered.qty.toLocaleString()}</td>
-                      <td className="p-2 text-center border border-black">{stats.filtered.cases.toLocaleString()}</td>
-                      <td className="p-2 border border-black"></td>
-                      <td className="p-2 text-center border border-black">{stats.filtered.cost.toLocaleString()} ج.م</td>
-                    </tr>
-                  </tfoot>
-                </table>
+                {insulinTables.map((tbl) => {
+                  const sectionStats = tbl.title === 'المجاني'
+                    ? stats.filteredByType.free
+                    : stats.filteredByType.subsidized;
+                  return (
+                    <div key={tbl.title} className="space-y-2">
+                      <h4 style={{ fontWeight: 800, fontSize: '1.1em', margin: '12px 0 6px 0' }}>{tbl.title}</h4>
+                      <table className="w-full text-right border-collapse border border-black text-[10px]">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-black">
+                            <th className="p-2 border border-black">الصنف</th>
+                            <th className="p-2 border border-black text-center">الكمية</th>
+                            <th className="p-2 border border-black text-center">عدد الحالات</th>
+                            <th className="p-2 border border-black text-center">سعر الوحدة</th>
+                            <th className="p-2 border border-black text-center">القيمة</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tbl.data.map((reg) => (
+                            <tr key={reg.id} className="border-b border-black">
+                              <td className="p-2 border border-black font-bold">{reg.name}</td>
+                              <td className="p-2 border border-black text-center">{reg.quantity} {reg.unit}</td>
+                              <td className="p-2 border border-black text-center">{reg.cases_count}</td>
+                              <td className="p-2 border border-black text-center">{parseFloat(reg.price || 0).toFixed(2)}</td>
+                              <td className="p-2 border border-black text-center font-bold">{parseFloat(reg.cost || 0).toFixed(2)} ج.م</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="font-bold border-t border-black">
+                            <td className="p-2 text-right">{tbl.title} ({sectionStats.count} سجل):</td>
+                            <td className="p-2 text-center border border-black">{sectionStats.qty.toLocaleString()}</td>
+                            <td className="p-2 text-center border border-black">{sectionStats.cases.toLocaleString()}</td>
+                            <td className="p-2 border border-black"></td>
+                            <td className="p-2 text-center border border-black">{sectionStats.cost.toLocaleString()} ج.م</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  );
+                })}
+                <div className="mt-3 border-t-2 border-black pt-2 text-[10px] font-bold text-right">
+                  الإجمالي العام ({stats.filtered.count} سجل) — الكمية: {stats.filtered.qty.toLocaleString()} | الحالات: {stats.filtered.cases.toLocaleString()} | التكلفة: {stats.filtered.cost.toLocaleString()} ج.م
+                </div>
               </PrintableTable>
             </div>
 

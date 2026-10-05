@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import PageHeader from "../../../components/ui/PageHeader";
 import Breadcrumb from "../../../components/ui/Breadcrumb";
@@ -47,13 +47,15 @@ import PrintableTable from "../../../components/common/PrintableTable";
 import { buildHierarchyLabel } from "../../../utils/reportUtils";
 import StatsBar from "../../../components/common/StatsBar";
 import ExportMenu from "../../../components/ui/ExportMenu";
-import { executePrint } from "../../../utils/exportPrint";
 import useLockGuard from "../../../hooks/useLockGuard";
 
 const JudicialDispensingPage = () => {
   const { activeHierarchy, hierarchyNames, workspaceMode, checkIsMonthLocked } = useGlobalApp();
   const toast = useToast();
   const location = useLocation();
+  // Ref to the toolbar ExportMenu — Ctrl+P opens the exact same PrintPreviewModal
+  // that ExportMenu → "طباعة التقرير" opens (shared imperative API).
+  const exportMenuRef = useRef(null);
   const [hierarchy, setHierarchy] = useState({
     branchId: location.state?.branchId || activeHierarchy.branchId || "",
     areaId: location.state?.areaId || activeHierarchy.areaId || "",
@@ -97,7 +99,7 @@ const JudicialDispensingPage = () => {
     {
       key: "p",
       ctrl: true,
-      handler: () => executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }),
+      handler: () => exportMenuRef.current?.openPrintPreview(),
       description: "طباعة",
     },
     {
@@ -547,14 +549,16 @@ const JudicialDispensingPage = () => {
               <History size={18} />
               <span>سجل المنصرف القضائي لهذا الشهر</span>
               <ExportMenu 
-                data={history} 
+                ref={exportMenuRef}
+                data={displayHistory} 
                 columns={[
-                  { header: "الحكم", accessor: "judgment_number" },
-                  { header: "الجهة", accessor: "court_name" },
-                  { header: "المستفيد", accessor: "beneficiary_name" },
-                  { header: "الدواء", accessor: "drug_name" },
+                  { header: "المريض", accessor: "patientName" },
+                  { header: "التشخيص", accessor: "diagnosis" },
+                  { header: "الدواء", accessor: "medicineName" },
+                  { header: "الوحدة", accessor: "unit" },
                   { header: "الكمية", accessor: (r) => r.quantity?.toString() || "0" },
-                  { header: "الإجمالي", accessor: (r) => parseFloat(r.total_cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+                  { header: "السعر", accessor: (r) => parseFloat(r.unit_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+                  { header: "الإجمالي", accessor: (r) => parseFloat(r.monthly_cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
                 ]} 
                 options={{ 
                   title: 'سجل المنصرف القضائي', 
