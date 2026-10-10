@@ -5,6 +5,7 @@ import HierarchySelector from '../../../components/common/HierarchySelector';
 import Card from '../../../components/ui/Card';
 import Pagination from '../../../components/ui/Pagination';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import { useToast } from '../../../components/ui/Toast';
 import { useGlobalApp } from '../../../context/useGlobalApp';
 import invoke from '../../../api/tauriApi';
@@ -66,6 +67,8 @@ const TicketsReportPage = () => {
   const toggleSupportedArea = (areaName) => setExpandedSupportedAreas(p => ({ ...p, [areaName]: !p[areaName] }));
 
   const chartRef = useRef(null);
+  const exportMenuRef = useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   const handleFetch = async () => {
     if (!hierarchy.branchId) {
@@ -439,6 +442,23 @@ const TicketsReportPage = () => {
     return { data: getProcessedData(false).allData, columns: ownedExportColumns };
   }, [tableViewMode, getProcessedData, ownedExportColumns, supportedExportColumns]);
 
+  const previewTables = useMemo(() => {
+    const tables = [];
+    if (tableViewMode === 'all' || tableViewMode === 'owned') {
+      const ownedData = getProcessedData(false).allData;
+      if (ownedData.length > 0) {
+        tables.push({ data: ownedData, columns: ownedExportColumns, title: 'العيادات المملوكة' });
+      }
+    }
+    if (tableViewMode === 'all' || tableViewMode === 'supported') {
+      const supportedData = getProcessedData(true).allData;
+      if (supportedData.length > 0) {
+        tables.push({ data: supportedData, columns: supportedExportColumns, title: 'العيادات المدعومة' });
+      }
+    }
+    return tables;
+  }, [tableViewMode, getProcessedData, ownedExportColumns, supportedExportColumns]);
+
   const renderOwnedRows = () => {
     const paginatedData = getProcessedData(false).data;
     if (paginatedData.length === 0) return <tr><td colSpan={13} className="p-8 text-center text-slate-500 font-bold">لا توجد سجلات حالياً</td></tr>;
@@ -605,10 +625,11 @@ const TicketsReportPage = () => {
         description="تقرير احترافي شامل لأعداد التذاكر الطبية (56ب، 56ج) — مقسم حسب النوع والأسابيع والفئات مع إمكانية الفلترة بالفترات."
         actions={
           <ExportMenu 
+            ref={exportMenuRef}
             data={exportProps.data} 
             columns={exportProps.columns} 
             onCustomExport={handlePremiumExport} 
-            options={{ title: 'تقرير التذاكر الطبية', fileName: `tickets_report_${hierarchy.dispenseMonth}` }} 
+            options={{ title: 'تقرير التذاكر الطبية', fileName: `tickets_report_${hierarchy.dispenseMonth}`, tables: previewTables }}
           />
         }
       />
@@ -942,7 +963,7 @@ const TicketsReportPage = () => {
             <span>سجلات العيادات المملوكة</span>
             <span className="text-xs font-bold text-[var(--color-text-muted)] mr-2">({getProcessedData(false).totalCount} سجل)</span>
           </div>
-          <div className="bg-[var(--color-bg-card)] rounded-2xl border border-[var(--color-border)] shadow-lg overflow-hidden">
+          <div className="no-print bg-[var(--color-bg-card)] rounded-2xl border border-[var(--color-border)] shadow-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-right text-xs">
                 <thead className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
@@ -1063,7 +1084,7 @@ const TicketsReportPage = () => {
             <span>سجلات العيادات المدعومة</span>
             <span className="text-xs font-bold text-[var(--color-text-muted)] mr-2">({getProcessedData(true).totalCount} سجل)</span>
           </div>
-          <div className="bg-[var(--color-bg-card)] rounded-2xl border border-[var(--color-border)] shadow-lg overflow-hidden">
+          <div className="no-print bg-[var(--color-bg-card)] rounded-2xl border border-[var(--color-border)] shadow-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-right text-xs">
                 <thead className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">

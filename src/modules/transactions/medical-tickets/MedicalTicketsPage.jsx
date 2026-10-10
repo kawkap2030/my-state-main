@@ -46,7 +46,6 @@ import PrintableTable from "../../../components/common/PrintableTable";
 import useReportSignatures from "../../../hooks/useReportSignatures";
 import StatsBar from "../../../components/common/StatsBar";
 import ExportMenu from "../../../components/ui/ExportMenu";
-import { executePrint } from "../../../utils/exportPrint";
 import MedicalTicketsGridEntry from "../../../components/forms/MedicalTicketsGridEntry";
 import useLockGuard from "../../../hooks/useLockGuard";
 
@@ -88,6 +87,7 @@ const MedicalTicketsPage = () => {
   // the weekly split on return (otherwise the original صباحي/مسائي split is
   // preserved through a plain round-trip).
   const monthlyEditedRef = useRef(false);
+  const exportMenuRef = useRef(null);
 
   // حالة البحث والترقيم
   const [currentPageOwned, setCurrentPageOwned] = useState(1);
@@ -1468,7 +1468,7 @@ const MedicalTicketsPage = () => {
     {
       key: "p",
       ctrl: true,
-      handler: async () => { await ensureSignaturesLoaded(); executePrint({ orientation: 'landscape', fontSize: 'md', margins: 'standard', showPageNumbers: true, showSignatures: true }); },
+      handler: async () => { await ensureSignaturesLoaded(); exportMenuRef.current?.openPrintPreview(); },
       description: "طباعة",
     },
     {
@@ -1745,6 +1745,7 @@ const MedicalTicketsPage = () => {
           description="تسجيل أعداد التذاكر الطبية (56ب، 56ج) بنظام أسبوعي أو شهري."
           actions={
             <ExportMenu 
+              ref={exportMenuRef}
               data={exportProps.data} 
               columns={exportProps.columns} 
               onCustomExport={handlePremiumExport} 
