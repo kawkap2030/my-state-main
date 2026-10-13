@@ -439,7 +439,18 @@ const TicketsReportPage = () => {
     if (tableViewMode === 'supported') {
       return { data: getProcessedData(true).allData, columns: supportedExportColumns };
     }
-    return { data: getProcessedData(false).allData, columns: ownedExportColumns };
+    const ownedData = getProcessedData(false).allData;
+    // In 'all' mode the export must stay usable when only ONE side has data:
+    // the screen still shows the present table, so export data must be the
+    // non-empty side (Word/PDF/Excel custom handlers still emit both tables
+    // regardless — this only keeps the menu enabled + feeds the preview).
+    if (tableViewMode === 'all') {
+      const supportedData = getProcessedData(true).allData;
+      if (ownedData.length === 0 && supportedData.length > 0) {
+        return { data: supportedData, columns: supportedExportColumns };
+      }
+    }
+    return { data: ownedData, columns: ownedExportColumns };
   }, [tableViewMode, getProcessedData, ownedExportColumns, supportedExportColumns]);
 
   const previewTables = useMemo(() => {
