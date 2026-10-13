@@ -6,6 +6,11 @@
    not the app's data-theme attribute toggle. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
+html,
+body {
+  background: var(--color-bg);
+}
+
 @theme {
   /* Light Mode Variables (Default - Premium High Contrast) */
   --color-primary: #0891b2;
@@ -804,6 +809,9 @@ html.theme-transitioning *::after {
   ::-webkit-scrollbar-thumb {
     background: var(--color-border);
     border-radius: 999px;
+  }
+  html::-webkit-scrollbar-track {
+    background: var(--color-bg);
   }
   a.no-underline {
     text-decoration: none;
