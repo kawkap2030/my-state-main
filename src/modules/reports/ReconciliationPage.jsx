@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Scale, RefreshCw, CheckCircle, TrendingUp, Layers, ChevronDown, ChevronLeft, Loader2, Pill, Ticket } from "lucide-react";
 import invoke from "../../api/tauriApi";
 import { useToast } from "../../components/ui/Toast";
@@ -10,6 +10,7 @@ import Button from "../../components/ui/Button";
 import ExportMenu from "../../components/ui/ExportMenu";
 import PrintPreviewModal from "../../components/common/PrintPreviewModal";
 import PrintableTable from "../../components/common/PrintableTable";
+import useReportPrintShortcut from "../../hooks/useReportPrintShortcut";
 import { exportMultiSheetExcel } from "../../utils/exportUtils";
 import { useGlobalApp } from "../../context/useGlobalApp";
 import { buildHierarchyLabel } from "../../utils/reportUtils";
@@ -37,6 +38,8 @@ const ReconciliationPage = () => {
   const [detailsData, setDetailsData] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const toast = useToast();
+  const exportMenuRef = useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   // Group data by category (for filter tabs and export)
   const groupedData = useMemo(() => {
@@ -59,31 +62,31 @@ const ReconciliationPage = () => {
     return groupedData.byCategory[activeCategory] || [];
   }, [data, activeCategory, groupedData]);
 
-  // Statistics — the redesigned report is a single-source breakdown (all
-  // INFO rows), so "differences" no longer exist. Meaningful stats instead:
-  // total rows, single-source rows, total value, expandable categories,
-  // and the total ticket count (56ب + 56ج) kept separate from money.
+  // Statistics — scoped to the ACTIVE tab (filteredData), so the cards,
+  // the print subtitle, and the custom-modal summary always describe the
+  // same rows the table (and the preview/Excel export) actually show.
+  // The "all" tab still shows full-report totals because filteredData === data then.
   const stats = useMemo(() => {
-    if (!data || data.length === 0) {
+    if (!filteredData || filteredData.length === 0) {
       return { total: 0, info: 0, totalValue: 0, expandable: 0, ticketsCount: 0 };
     }
-    const info = data.filter(r => r.status === "INFO").length;
+    const info = filteredData.filter(r => r.status === "INFO").length;
     // Total value across all source rows — exclude the summary row because
     // it already sums every source (counting it would double-count), and
     // the tickets row because it carries a COUNT, not a monetary value.
-    const valueRows = data.filter(r => r.category !== 'summary' && r.category !== 'tickets');
+    const valueRows = filteredData.filter(r => r.category !== 'summary' && r.category !== 'tickets');
     const totalValue = valueRows.reduce(
       (s, r) => s + (r.detailed_total || 0) + (r.monthly_total || 0), 0
     );
     // Expandable rows: drug categories + insulin groups (have category_name)
-    const expandable = data.filter(r => r.category_name).length;
+    const expandable = filteredData.filter(r => r.category_name).length;
     // Total ticket count (56ب + 56ج) — a COUNT, never money
-    const ticketsCount = data
+    const ticketsCount = filteredData
       .filter(r => r.category === 'tickets')
       .reduce((s, r) => s + (parseFloat(r.detailed_total) || 0), 0);
 
-    return { total: data.length, info, totalValue, expandable, ticketsCount };
-  }, [data]);
+    return { total: filteredData.length, info, totalValue, expandable, ticketsCount };
+  }, [filteredData]);
 
   // Category breakdown
   const categoryBreakdown = useMemo(() => {
@@ -282,7 +285,7 @@ const ReconciliationPage = () => {
           icon={Scale}
           description="كشف توزيع مصادر البيانات حسب الفئات — كل فئة تُعرض منفصلة بذاتها (التفصيلي بالتصنيف الدوائي، والشهري بفئات التمويل) دون مقارنة غير صحيحة بين مجموعات مختلفة."
         />
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap no-print">
           <Button onClick={loadReport} variant="outline" icon={RefreshCw} loading={loading}>
             تحديث البيانات
           </Button>
@@ -290,6 +293,7 @@ const ReconciliationPage = () => {
             معاينة الطباعة
           </Button>
           <ExportMenu 
+            ref={exportMenuRef}
             data={filteredData}
             columns={exportColumns} 
             options={{ 
@@ -302,12 +306,14 @@ const ReconciliationPage = () => {
         </div>
       </div>
 
-      <HierarchySelector
-        onSelectionChange={(data) => setHierarchy(prev => ({ ...prev, ...data }))}
-        initialBranch={hierarchy.branchId}
-        initialMonth={hierarchy.dispenseMonth}
-        compact
-      />
+      <div className="no-print">
+        <HierarchySelector
+          onSelectionChange={(data) => setHierarchy(prev => ({ ...prev, ...data }))}
+          initialBranch={hierarchy.branchId}
+          initialMonth={hierarchy.dispenseMonth}
+          compact
+        />
+      </div>
 
       {/* Stats Overview Cards */}
       {data.length > 0 && (
@@ -370,7 +376,7 @@ const ReconciliationPage = () => {
 
       {/* Category Filter Tabs */}
       {data.length > 0 && (
-        <Card className="p-3">
+        <Card className="p-3 no-print">
           <div className="flex flex-wrap items-center gap-2" dir="rtl">
             <span className="text-xs font-bold text-[var(--color-text-muted)] ml-2">عرض:</span>
             <button
@@ -381,7 +387,7 @@ const ReconciliationPage = () => {
                   : "bg-[var(--color-bg)] text-[var(--color-text)] border border-[var(--color-border)] hover:bg-cyan-50"
               }`}
             >
-              🌐 الكل ({stats.total})
+              🌐 الكل ({data.length})
             </button>
             {categoryBreakdown.map(cat => (
               <button
@@ -445,7 +451,7 @@ const ReconciliationPage = () => {
                             {expandKey && (
                               <button
                                 onClick={() => toggleDetails(row)}
-                                className={`shrink-0 p-1.5 rounded-lg border transition-all flex items-center gap-1 text-[10px] font-black ${
+                                className={`shrink-0 p-1.5 rounded-lg border transition-all flex items-center gap-1 text-[10px] font-black no-print ${
                                   isExpanded
                                     ? 'bg-cyan-600 text-white border-transparent shadow-md'
                                     : 'bg-[var(--color-bg-card)] text-[var(--color-primary)] border-[var(--color-border)] hover:bg-cyan-50'
