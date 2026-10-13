@@ -874,7 +874,7 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh, hideDire
             <tfoot>
               <tr className="border-t-2 border-[var(--color-border)]" style={{ backgroundColor: 'color-mix(in srgb, var(--color-primary) 6%, var(--color-bg-card))' }}>
                 <td className="p-4 font-black text-sm text-[var(--color-text)]">
-                  إجمالي المفلتر ({filteredRecords.length} سجل{records.length !== filteredRecords.length ? ` من ${records.length}` : ''})
+                  إجمالي المفلتر ({filteredRecords.length} سجل{allStats.count !== filteredRecords.length ? ` من ${allStats.count}` : ''})
                 </td>
                 <td className="p-4"></td>
                 {mode === 'free' ? (
@@ -943,15 +943,6 @@ const MonthlyHistoryTable = ({ mode, refreshTrigger, onEdit, onRefresh, hideDire
       />
       </div>
     </Card>
-
-    <ConfirmModal
-      isOpen={!!deleteTarget}
-      onClose={() => setDeleteTarget(null)}
-      onConfirm={confirmDelete}
-      title="تأكيد الحذف"
-      message={`هل أنت متأكد من حذف سجل الصرف لشهر ${deleteTarget?.dispense_month}؟`}
-      loading={deleteLoading}
-    />
 
     <Modal
         isOpen={!!viewRecord}
