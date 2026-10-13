@@ -1166,7 +1166,17 @@ pub fn get_executive_report_summary(
 ) -> Result<ExecutiveReportSummary, String> {
     let conn_guard = state.db.lock().map_err(|e| e.to_string())?;
     let conn = conn_guard.as_ref().ok_or("Database not initialized")?;
+    executive_report_summary_core(conn, branchId, areaId, clinicId, dispenseMonth)
+}
 
+#[allow(non_snake_case)]
+pub fn executive_report_summary_core(
+    conn: &rusqlite::Connection,
+    branchId: Option<i32>,
+    areaId: Option<i32>,
+    clinicId: Option<i32>,
+    dispenseMonth: String,
+) -> Result<ExecutiveReportSummary, String> {
     let mut where_clause = "WHERE dispense_month = ?1".to_string();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(dispenseMonth.clone())];
 
@@ -1223,26 +1233,10 @@ pub fn get_executive_report_summary(
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     ).unwrap_or((None, None, None));
 
-    // 6. Medical Tickets (only clinic_id directly referenced)
-    let mut cid_where = "WHERE dispense_month = ?1".to_string();
-    if let Some(_cid) = clinicId {
-        cid_where.push_str(" AND clinic_id = ?2");
-    } else if let Some(_aid) = areaId {
-        cid_where.push_str(" AND clinic_id IN (SELECT id FROM clinics WHERE area_id = ?2)");
-    } else if let Some(_bid) = branchId {
-        cid_where.push_str(" AND clinic_id IN (SELECT c.id FROM clinics c JOIN areas a ON c.area_id = a.id WHERE a.branch_id = ?2)");
-    }
-
-    let params_cid: Vec<Box<dyn rusqlite::ToSql>> = if let Some(id) = clinicId.or(areaId).or(branchId) {
-        vec![Box::new(dispenseMonth.clone()), Box::new(id)]
-    } else {
-        vec![Box::new(dispenseMonth.clone())]
-    };
-    let params_cid_ref: Vec<&dyn rusqlite::ToSql> = params_cid.iter().map(|b| b.as_ref()).collect();
-
+    // 6. Medical Tickets
     let (t_56b, t_56c): (Option<i32>, Option<i32>) = conn.query_row(
-        &format!("SELECT SUM(tickets_56b), SUM(tickets_56c) FROM medical_tickets {}", cid_where),
-        params_cid_ref.as_slice(),
+        &format!("SELECT SUM(tickets_56b), SUM(tickets_56c) FROM medical_tickets {}", where_clause),
+        params_ref.as_slice(),
         |row| Ok((row.get(0)?, row.get(1)?))
     ).unwrap_or((None, None));
 
@@ -2701,5 +2695,117 @@ pub fn get_compliance_report(
         partially_compliant,
         non_compliant,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../../../schema.sql")).unwrap();
+        conn
+    }
+
+    fn insert_ticket(
+        conn: &Connection,
+        branch_id: i32,
+        area_id: Option<i32>,
+        clinic_id: Option<i32>,
+        dispense_month: &str,
+        b56: i32,
+        c56: i32,
+    ) {
+        conn.execute(
+            "INSERT INTO medical_tickets
+                (branch_id, area_id, clinic_id, dispense_month, period, category,
+                 tickets_56b, tickets_56c, is_supported_clinic, week_number)
+             VALUES (?1, ?2, ?3, ?4, 'morning', 'general', ?5, ?6, 0, 1)",
+            rusqlite::params![branch_id, area_id, clinic_id, dispense_month, b56, c56],
+        )
+        .unwrap();
+    }
+
+    fn tickets_for(
+        conn: &Connection,
+        branch_id: Option<i32>,
+        area_id: Option<i32>,
+        clinic_id: Option<i32>,
+        dispense_month: &str,
+    ) -> (i32, i32) {
+        let summary = executive_report_summary_core(
+            conn,
+            branch_id,
+            area_id,
+            clinic_id,
+            dispense_month.to_string(),
+        )
+        .unwrap();
+        (summary.tickets_56b, summary.tickets_56c)
+    }
+
+    #[test]
+    fn branch_level_rows_with_null_clinic_are_counted() {
+        let conn = test_db();
+        insert_ticket(&conn, 1, None, None, "2026-08", 400, 450);
+        insert_ticket(&conn, 1, None, None, "2026-08", 16, 0);
+        assert_eq!(
+            tickets_for(&conn, Some(1), None, None, "2026-08"),
+            (416, 450)
+        );
+    }
+
+    #[test]
+    fn dispense_month_filter_still_applies() {
+        let conn = test_db();
+        insert_ticket(&conn, 1, None, None, "2026-08", 100, 200);
+        insert_ticket(&conn, 1, None, None, "2026-09", 900, 900);
+        assert_eq!(
+            tickets_for(&conn, Some(1), None, None, "2026-08"),
+            (100, 200)
+        );
+        assert_eq!(
+            tickets_for(&conn, Some(1), None, None, "2026-09"),
+            (900, 900)
+        );
+    }
+
+    #[test]
+    fn area_scope_excludes_other_areas_and_branch_level_rows() {
+        let conn = test_db();
+        insert_ticket(&conn, 2, Some(10), None, "2026-08", 30, 40);
+        insert_ticket(&conn, 2, Some(20), None, "2026-08", 500, 600);
+        insert_ticket(&conn, 2, None, None, "2026-08", 7000, 8000);
+        insert_ticket(&conn, 4, Some(40), None, "2026-08", 9000, 9000);
+        assert_eq!(
+            tickets_for(&conn, Some(2), Some(10), None, "2026-08"),
+            (30, 40)
+        );
+    }
+
+    #[test]
+    fn clinic_scope_excludes_other_clinics() {
+        let conn = test_db();
+        insert_ticket(&conn, 3, Some(30), Some(100), "2026-08", 7, 8);
+        insert_ticket(&conn, 3, Some(30), Some(101), "2026-08", 70, 80);
+        insert_ticket(&conn, 3, Some(30), None, "2026-08", 700, 800);
+        insert_ticket(&conn, 3, None, None, "2026-08", 7000, 8000);
+        assert_eq!(
+            tickets_for(&conn, Some(3), Some(30), Some(100), "2026-08"),
+            (7, 8)
+        );
+    }
+
+    #[test]
+    fn each_row_counted_exactly_once() {
+        let conn = test_db();
+        insert_ticket(&conn, 1, None, None, "2026-08", 100, 10);
+        insert_ticket(&conn, 1, None, None, "2026-08", 200, 20);
+        assert_eq!(
+            tickets_for(&conn, Some(1), None, None, "2026-08"),
+            (300, 30)
+        );
+    }
 }
 
