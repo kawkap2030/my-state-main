@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import PageHeader from '../../../components/ui/PageHeader';
 import Breadcrumb from '../../../components/ui/Breadcrumb';
 import HierarchySelector from '../../../components/common/HierarchySelector';
@@ -7,6 +7,7 @@ import Button from '../../../components/ui/Button';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import PrintableTable from '../../../components/common/PrintableTable';
 import { exportMultiSheetExcel, exportToWord, exportToPDF } from '../../../utils/exportUtils';
 import {
@@ -111,6 +112,8 @@ const AnomalyDetectionPage = () => {
   const [surgeColOpen, setSurgeColOpen] = useState(false);
   const [insulinColOpen, setInsulinColOpen] = useState(false);
   const [supplyColOpen, setSupplyColOpen] = useState(false);
+  const exportMenuRef = useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   const handleGenerate = async () => {
     if (!hierarchy.branchId) { toast.warning('يرجى اختيار الفرع على الأقل'); return; }
@@ -151,65 +154,132 @@ const AnomalyDetectionPage = () => {
   const maxInsulinDev = useMemo(() => data ? Math.max(...data.insulin_outliers.map(o => o.deviation_pct), 1) : 1, [data]);
   const maxSupplyDev = useMemo(() => data ? Math.max(...data.supply_outliers.map(o => o.deviation_pct), 1) : 1, [data]);
 
+  // Shared table builders — used by the custom Excel/Word/PDF export AND by
+  // the unified print preview (options.tables), so both show identical tables
+  // honoring the on-screen column toggles.
+  const outRows = useMemo(() => {
+    if (!data) return [];
+    return data.clinic_outliers.map(o => {
+      const r = {};
+      if (outlierCols.clinic) r['العيادة'] = o.clinic_name;
+      if (outlierCols.drug) r['الصنف الدوائي'] = o.drug_name;
+      if (outlierCols.actual) r['الكمية الفعلية'] = o.actual_qty;
+      if (outlierCols.avg) r['المتوسط العام'] = o.avg_qty.toFixed(1);
+      if (outlierCols.dev) r['نسبة التجاوز %'] = o.deviation_pct.toFixed(1) + '%';
+      if (outlierCols.severity) r['مستوى الخطورة'] = o.deviation_pct >= 300 ? 'خطر حرج' : o.deviation_pct >= 200 ? 'تنبيه عالي' : 'مراقبة';
+      return r;
+    });
+  }, [data, outlierCols]);
+
+  const tickRows = useMemo(() => {
+    if (!data) return [];
+    return data.ticket_mismatches.map(t => {
+      const r = {};
+      if (ticketCols.clinic) r['العيادة'] = t.clinic_name;
+      if (ticketCols.tickets) r['عدد التذاكر'] = t.total_tickets;
+      if (ticketCols.cost) r['التكلفة الكلية'] = t.total_cost.toLocaleString() + ' ج.م';
+      if (ticketCols.cpt) r['تكلفة التذكرة'] = t.cost_per_ticket.toFixed(1) + ' ج.م';
+      if (ticketCols.avg_cpt) r['المتوسط العام'] = t.avg_cost_per_ticket.toFixed(1) + ' ج.م';
+      if (ticketCols.dev) r['نسبة التجاوز %'] = t.deviation_pct.toFixed(1) + '%';
+      return r;
+    });
+  }, [data, ticketCols]);
+
+  const surgeRows = useMemo(() => {
+    if (!data) return [];
+    return data.surge_drugs.map(s => {
+      const r = {};
+      if (surgeCols.drug) r['الصنف الدوائي'] = s.drug_name;
+      if (surgeCols.current) r['تكلفة الشهر الحالي'] = s.current_cost.toLocaleString() + ' ج.م';
+      if (surgeCols.previous) r['تكلفة الشهر السابق'] = s.previous_cost.toLocaleString() + ' ج.م';
+      if (surgeCols.growth) r['نسبة النمو %'] = s.growth_pct.toFixed(1) + '%';
+      return r;
+    });
+  }, [data, surgeCols]);
+
+  const insulinRows = useMemo(() => {
+    if (!data) return [];
+    return data.insulin_outliers.map(o => {
+      const r = {};
+      if (insulinCols.clinic) r['العيادة'] = o.clinic_name;
+      if (insulinCols.drug) r['الصنف الدوائي'] = o.drug_name;
+      if (insulinCols.actual) r['الكمية الفعلية'] = o.actual_qty;
+      if (insulinCols.avg) r['المتوسط العام'] = o.avg_qty.toFixed(1);
+      if (insulinCols.dev) r['نسبة التجاوز %'] = o.deviation_pct.toFixed(1) + '%';
+      if (insulinCols.severity) r['مستوى الخطورة'] = o.deviation_pct >= 300 ? 'خطر حرج' : o.deviation_pct >= 200 ? 'تنبيه عالي' : 'مراقبة';
+      return r;
+    });
+  }, [data, insulinCols]);
+
+  const supplyRows = useMemo(() => {
+    if (!data) return [];
+    return data.supply_outliers.map(o => {
+      const r = {};
+      if (supplyCols.clinic) r['العيادة'] = o.clinic_name;
+      if (supplyCols.drug) r['الصنف الدوائي'] = o.drug_name;
+      if (supplyCols.actual) r['الكمية الفعلية'] = o.actual_qty;
+      if (supplyCols.avg) r['المتوسط العام'] = o.avg_qty.toFixed(1);
+      if (supplyCols.dev) r['نسبة التجاوز %'] = o.deviation_pct.toFixed(1) + '%';
+      if (supplyCols.severity) r['مستوى الخطورة'] = o.deviation_pct >= 300 ? 'خطر حرج' : o.deviation_pct >= 200 ? 'تنبيه عالي' : 'مراقبة';
+      return r;
+    });
+  }, [data, supplyCols]);
+
+  const outlierColsDef = useMemo(() => OUTLIER_COLS_DEF.filter(d => outlierCols[d.id]).map(d => ({
+    header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
+    accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
+  })), [outlierCols]);
+
+  const ticketColsDef = useMemo(() => TICKET_COLS_DEF.filter(d => ticketCols[d.id]).map(d => ({
+    header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
+    accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
+  })), [ticketCols]);
+
+  const surgeColsDef = useMemo(() => SURGE_COLS_DEF.filter(d => surgeCols[d.id]).map(d => ({
+    header: d.label === 'نسبة التجاوز' ? 'نسبة النمو %' : d.label,
+    accessor: d.label === 'نسبة التجاوز' ? 'نسبة النمو %' : d.label
+  })), [surgeCols]);
+
+  const insulinColsDef = useMemo(() => OUTLIER_COLS_DEF.filter(d => insulinCols[d.id]).map(d => ({
+    header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
+    accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
+  })), [insulinCols]);
+
+  const supplyColsDef = useMemo(() => OUTLIER_COLS_DEF.filter(d => supplyCols[d.id]).map(d => ({
+    header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
+    accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
+  })), [supplyCols]);
+
+  const previewTables = useMemo(() => {
+    if (!data) return [];
+    const tables = [];
+    if (outRows.length > 0) tables.push({ data: outRows, columns: outlierColsDef, title: 'العيادات الشاذة استهلاكياً' });
+    if (tickRows.length > 0) tables.push({ data: tickRows, columns: ticketColsDef, title: 'انحراف التذاكر' });
+    if (surgeRows.length > 0) tables.push({ data: surgeRows, columns: surgeColsDef, title: 'أصناف النمو المفاجئ' });
+    if (insulinRows.length > 0) tables.push({ data: insulinRows, columns: outlierColsDef, title: 'العيادات الشاذة في صرف الإنسولين' });
+    if (supplyRows.length > 0) tables.push({ data: supplyRows, columns: outlierColsDef, title: 'العيادات الشاذة في استهلاك المستلزمات' });
+    return tables;
+  }, [data, outRows, tickRows, surgeRows, insulinRows, supplyRows, outlierColsDef, ticketColsDef, surgeColsDef]);
+
   const handlePremiumExport = async (type, { options }) => {
     if (!data) return false;
     try {
-      // 1. Prepare Outlier sheet rows
-      const outRows = data.clinic_outliers.map(o => {
-        const r = {};
-        if (outlierCols.clinic) r['العيادة'] = o.clinic_name;
-        if (outlierCols.drug) r['الصنف الدوائي'] = o.drug_name;
-        if (outlierCols.actual) r['الكمية الفعلية'] = o.actual_qty;
-        if (outlierCols.avg) r['المتوسط العام'] = o.avg_qty.toFixed(1);
-        if (outlierCols.dev) r['نسبة التجاوز %'] = o.deviation_pct.toFixed(1) + '%';
-        if (outlierCols.severity) r['مستوى الخطورة'] = o.deviation_pct >= 300 ? 'خطر حرج' : o.deviation_pct >= 200 ? 'تنبيه عالي' : 'مراقبة';
-        return r;
-      });
-
-      // 2. Prepare Mismatch sheet rows
-      const tickRows = data.ticket_mismatches.map(t => {
-        const r = {};
-        if (ticketCols.clinic) r['العيادة'] = t.clinic_name;
-        if (ticketCols.tickets) r['عدد التذاكر'] = t.total_tickets;
-        if (ticketCols.cost) r['التكلفة الكلية'] = t.total_cost.toLocaleString() + ' ج.م';
-        if (ticketCols.cpt) r['تكلفة التذكرة'] = t.cost_per_ticket.toFixed(1) + ' ج.م';
-        if (ticketCols.avg_cpt) r['المتوسط العام'] = t.avg_cost_per_ticket.toFixed(1) + ' ج.م';
-        if (ticketCols.dev) r['نسبة التجاوز %'] = t.deviation_pct.toFixed(1) + '%';
-        return r;
-      });
-
-      // 3. Prepare Surge sheet rows
-      const surgeRows = data.surge_drugs.map(s => {
-        const r = {};
-        if (surgeCols.drug) r['الصنف الدوائي'] = s.drug_name;
-        if (surgeCols.current) r['تكلفة الشهر الحالي'] = s.current_cost.toLocaleString() + ' ج.م';
-        if (surgeCols.previous) r['تكلفة الشهر السابق'] = s.previous_cost.toLocaleString() + ' ج.م';
-        if (surgeCols.growth) r['نسبة النمو %'] = s.growth_pct.toFixed(1) + '%';
-        return r;
-      });
-
       if (type === 'excel') {
         const sheetsData = {};
         if (outRows.length > 0) {
-          const cols = OUTLIER_COLS_DEF.filter(d => outlierCols[d.id]).map(d => ({
-            header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
-            accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
-          }));
-          sheetsData['العيادات الشاذة استهلاكياً'] = { data: outRows, columns: cols, options };
+          sheetsData['العيادات الشاذة استهلاكياً'] = { data: outRows, columns: outlierColsDef, options };
         }
         if (tickRows.length > 0) {
-          const cols = TICKET_COLS_DEF.filter(d => ticketCols[d.id]).map(d => ({
-            header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
-            accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
-          }));
-          sheetsData['انحراف التذاكر'] = { data: tickRows, columns: cols, options };
+          sheetsData['انحراف التذاكر'] = { data: tickRows, columns: ticketColsDef, options };
         }
         if (surgeRows.length > 0) {
-          const cols = SURGE_COLS_DEF.filter(d => surgeCols[d.id]).map(d => ({
-            header: d.label === 'نسبة التجاوز' ? 'نسبة النمو %' : d.label,
-            accessor: d.label === 'نسبة التجاوز' ? 'نسبة النمو %' : d.label
-          }));
-          sheetsData['أصناف النمو المفاجئ'] = { data: surgeRows, columns: cols, options };
+          sheetsData['أصناف النمو المفاجئ'] = { data: surgeRows, columns: surgeColsDef, options };
+        }
+        if (insulinRows.length > 0) {
+          sheetsData['العيادات الشاذة في صرف الإنسولين'] = { data: insulinRows, columns: insulinColsDef, options };
+        }
+        if (supplyRows.length > 0) {
+          sheetsData['العيادات الشاذة في استهلاك المستلزمات'] = { data: supplyRows, columns: supplyColsDef, options };
         }
 
         const globalOptions = {
@@ -222,6 +292,8 @@ const AnomalyDetectionPage = () => {
               ['عدد العيادات الشاذة استهلاكياً', `${kpis.outliers} حالة`],
               ['عدد انحرافات التذاكر/التكلفة', `${kpis.mismatches} عيادة`],
               ['عدد الأصناف ذات النمو المفاجئ', `${kpis.surges} صنف`],
+              ['العيادات الشاذة في صرف الإنسولين', `${kpis.insulinOutliers} حالة`],
+              ['العيادات الشاذة في استهلاك المستلزمات', `${kpis.supplyOutliers} حالة`],
               ['حالات الخطر الحرج المكتشفة', `${kpis.critical} حالة`]
             ]
           }
@@ -231,25 +303,7 @@ const AnomalyDetectionPage = () => {
         return true;
       }
 
-      // Word & PDF: mirror the Excel sheets as separate titled tables
-      const outlierColsDef = OUTLIER_COLS_DEF.filter(d => outlierCols[d.id]).map(d => ({
-        header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
-        accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
-      }));
-      const ticketColsDef = TICKET_COLS_DEF.filter(d => ticketCols[d.id]).map(d => ({
-        header: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label,
-        accessor: d.label === 'نسبة التجاوز' ? 'نسبة التجاوز %' : d.label
-      }));
-      const surgeColsDef = SURGE_COLS_DEF.filter(d => surgeCols[d.id]).map(d => ({
-        header: d.label === 'نسبة التجاوز' ? 'نسبة النمو %' : d.label,
-        accessor: d.label === 'نسبة التجاوز' ? 'نسبة النمو %' : d.label
-      }));
-
-      const multiTables = [];
-      if (outRows.length > 0) multiTables.push({ data: outRows, columns: outlierColsDef, title: 'العيادات الشاذة استهلاكياً' });
-      if (tickRows.length > 0) multiTables.push({ data: tickRows, columns: ticketColsDef, title: 'انحراف التذاكر' });
-      if (surgeRows.length > 0) multiTables.push({ data: surgeRows, columns: surgeColsDef, title: 'أصناف النمو المفاجئ' });
-
+      // Word & PDF: reuse the same preview tables (identical rows/columns).
       const exportOptions = {
         ...options,
         title: `تقرير رصد الانحرافات والأنماط الشاذة - ${month}`,
@@ -258,8 +312,8 @@ const AnomalyDetectionPage = () => {
       };
       // Guard: only pass tables when at least one sheet has data — an empty
       // array would render NO tables in the Word engine ([] is truthy).
-      const wordPdfOptions = multiTables.length > 0
-        ? { ...exportOptions, tables: multiTables }
+      const wordPdfOptions = previewTables.length > 0
+        ? { ...exportOptions, tables: previewTables }
         : exportOptions;
 
       if (type === 'word') {
@@ -290,13 +344,15 @@ const AnomalyDetectionPage = () => {
         actions={
           data && (
             <ExportMenu
-              data={data}
-              columns={[]}
+              ref={exportMenuRef}
+              data={outRows}
+              columns={outlierColsDef}
               onCustomExport={handlePremiumExport}
               options={{
                 title: `تقرير رصد الانحرافات والأنماط الشاذة - ${month}`,
                 fileName: `anomaly_report_${month}`,
-                subtitle: `شهر التحليل: ${month}`
+                subtitle: `شهر التحليل: ${month}`,
+                tables: previewTables
               }}
             />
           )

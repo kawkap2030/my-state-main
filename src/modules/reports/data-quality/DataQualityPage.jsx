@@ -39,6 +39,27 @@ const pctBg = (pct) => {
   return 'bg-red-500';
 };
 
+// Shared column definitions — used by the custom Excel/Word/PDF export AND
+// by the unified print preview (options.tables), so both show identical tables.
+const monthCols = [
+  { header: 'الشهر', accessor: 'month' },
+  { header: 'الحالة', accessor: 'status' },
+  { header: 'عيادات أدوية', accessor: 'drugs' },
+  { header: 'عيادات إجماليات', accessor: 'monthly' },
+  { header: 'عيادات إنسولين', accessor: 'insulin' },
+  { header: 'عيادات تذاكر', accessor: 'tickets' },
+  { header: 'عيادات مستلزمات', accessor: 'supplies' },
+  { header: 'فروع نشطة', accessor: 'branches' },
+  { header: 'نسبة الاكتمال %', accessor: 'pct' },
+];
+
+const missingCols = [
+  { header: 'العيادة', accessor: 'clinic' },
+  { header: 'المنطقة', accessor: 'area' },
+  { header: 'الفرع', accessor: 'branch' },
+  { header: 'آخر نشاط', accessor: 'last' },
+];
+
 const DataQualityPage = () => {
   const toast = useToast();
   const [data, setData] = useState(null);
@@ -75,45 +96,42 @@ const DataQualityPage = () => {
     return data.months.find(m => m.dispense_month === selectedMonth) || null;
   }, [data, selectedMonth]);
 
+  const monthRows = useMemo(() => {
+    if (!data) return [];
+    return data.months.map(m => ({
+      month: formatMonth(m.dispense_month),
+      status: m.is_locked ? 'مقفل' : 'مفتوح',
+      drugs: `${m.clinics_with_drugs} / ${m.total_clinics}`,
+      monthly: `${m.clinics_with_monthly} / ${m.total_clinics}`,
+      insulin: `${m.clinics_with_insulin} / ${m.total_clinics}`,
+      tickets: `${m.clinics_with_tickets} / ${m.total_clinics}`,
+      supplies: `${m.clinics_with_supplies} / ${m.total_clinics}`,
+      branches: `${m.branches_with_data} / ${m.total_branches}`,
+      pct: `${m.completeness_pct.toFixed(1)}%`,
+    }));
+  }, [data]);
+
+  const missingRows = useMemo(() => {
+    if (!data) return [];
+    return data.missing_clinics.map(c => ({
+      clinic: c.clinic_name,
+      area: c.area_name,
+      branch: c.branch_name,
+      last: formatMonth(c.last_active_month),
+    }));
+  }, [data]);
+
+  const previewTables = useMemo(() => {
+    if (!data) return undefined;
+    return [
+      { data: monthRows, columns: monthCols, title: 'جودة الشهور' },
+      { data: missingRows, columns: missingCols, title: 'العيادات المفقودة' },
+    ];
+  }, [data, monthRows, missingRows]);
+
   const handlePremiumExport = async (type, { options }) => {
     if (!data) return false;
     try {
-      const monthCols = [
-        { header: 'الشهر', accessor: 'month' },
-        { header: 'الحالة', accessor: 'status' },
-        { header: 'عيادات أدوية', accessor: 'drugs' },
-        { header: 'عيادات إجماليات', accessor: 'monthly' },
-        { header: 'عيادات إنسولين', accessor: 'insulin' },
-        { header: 'عيادات تذاكر', accessor: 'tickets' },
-        { header: 'عيادات مستلزمات', accessor: 'supplies' },
-        { header: 'فروع نشطة', accessor: 'branches' },
-        { header: 'نسبة الاكتمال %', accessor: 'pct' },
-      ];
-      const monthRows = data.months.map(m => ({
-        month: formatMonth(m.dispense_month),
-        status: m.is_locked ? 'مقفل' : 'مفتوح',
-        drugs: `${m.clinics_with_drugs} / ${m.total_clinics}`,
-        monthly: `${m.clinics_with_monthly} / ${m.total_clinics}`,
-        insulin: `${m.clinics_with_insulin} / ${m.total_clinics}`,
-        tickets: `${m.clinics_with_tickets} / ${m.total_clinics}`,
-        supplies: `${m.clinics_with_supplies} / ${m.total_clinics}`,
-        branches: `${m.branches_with_data} / ${m.total_branches}`,
-        pct: `${m.completeness_pct.toFixed(1)}%`,
-      }));
-
-      const missingCols = [
-        { header: 'العيادة', accessor: 'clinic' },
-        { header: 'المنطقة', accessor: 'area' },
-        { header: 'الفرع', accessor: 'branch' },
-        { header: 'آخر نشاط', accessor: 'last' },
-      ];
-      const missingRows = data.missing_clinics.map(c => ({
-        clinic: c.clinic_name,
-        area: c.area_name,
-        branch: c.branch_name,
-        last: formatMonth(c.last_active_month),
-      }));
-
       const exportOptions = {
         ...options,
         title: 'تقرير جودة البيانات ومتابعة الإدخال الشهري',
@@ -169,7 +187,7 @@ const DataQualityPage = () => {
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
               <span>تحديث</span>
             </Button>
-            {data && <ExportMenu ref={exportMenuRef} data={data.months || []} onCustomExport={handlePremiumExport} />}
+            {data && <ExportMenu ref={exportMenuRef} data={data.months || []} columns={monthCols} onCustomExport={handlePremiumExport} options={{ title: 'تقرير جودة البيانات', fileName: 'data_quality_report', subtitle: selectedMonth ? `شهر التقرير: ${formatMonth(selectedMonth)}` : '', month: selectedMonth || '', tables: previewTables }} />}
           </div>
         }
       />
