@@ -48,8 +48,10 @@ pub fn resolve_id_by_logical_key(
 
 /// Coexistence guard, scoped to a SINGLE table: forbids a Branch-level total for
 /// a branch+month from coexisting with Area/Clinic-level rows of that same
-/// branch+month (and vice versa). Because it only inspects `table`, Free and
-/// Supported records never conflict with each other.
+/// branch+month (and vice versa), and forbids an Area-level total for an area
+/// from coexisting with Clinic-level rows of that same area+month (and vice
+/// versa). Because it only inspects `table`, Free and Supported records never
+/// conflict with each other.
 pub fn enforce_coexistence(
     conn: &rusqlite::Connection,
     table: &str,
@@ -91,6 +93,37 @@ pub fn enforce_coexistence(
             .unwrap_or(0);
         if exists_branch > 0 {
             return Err("عذراً، توجد بيانات مجمعة على مستوى الفرع لهذا الشهر. لا يمكن إدخال سجلات مناطق أو عيادات لهذا الفرع منعاً للتكرار.".to_string());
+        }
+
+        // An Area-level total already contains its clinics, so it must not
+        // coexist with a clinic row of that SAME area+month (and vice versa)
+        // or the same quantities would be counted twice. Clinics of DIFFERENT
+        // areas of the same branch stay allowed, and several distinct clinics
+        // inside the same area stay allowed.
+        if let Some(area) = area_id {
+            let conflict_clause = if level == "clinic" {
+                "area_id = ?4 AND clinic_id IS NULL"
+            } else {
+                "area_id = ?4 AND clinic_id IS NOT NULL"
+            };
+            let exists_area_clinic_conflict: i32 = conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM {}
+                         WHERE branch_id = ?1 AND dispense_month = ?2 AND id != ?3 AND {}",
+                        table, conflict_clause
+                    ),
+                    rusqlite::params![branch_id, dispense_month, exclude_id, area],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if exists_area_clinic_conflict > 0 {
+                return Err(if level == "clinic" {
+                    "عذراً، توجد بيانات مجمعة على مستوى المنطقة لهذا الشهر. لا يمكن إدخال سجل عيادة تابعة لنفس المنطقة منعاً لتضارب البيانات.".to_string()
+                } else {
+                    "عذراً، توجد سجلات عيادات تابعة لنفس المنطقة في هذا الفرع والشهر. لا يمكن إدخال إجمالي على مستوى المنطقة منعاً لتضارب البيانات.".to_string()
+                });
+            }
         }
     }
     Ok(())

@@ -836,6 +836,79 @@ mod tests {
         assert_eq!(sup_rows(&conn), 1);
     }
 
+    // Test 12c: an Area-level total and a Clinic-level row of the SAME area must
+    // be rejected in BOTH directions inside the Free table, while a clinic of a
+    // DIFFERENT area and a second clinic of the SAME area stay allowed.
+    #[test]
+    fn test_12c_free_area_and_clinic_same_area_rejected() {
+        let conn = test_db();
+        // Area 10 total first, then a clinic of area 10 -> REJECTED.
+        save_free_monthly_drugs_dispensed_core(&conn, &free(None, 1, Some(10), None, "2026-08", 50.0), true).unwrap();
+        assert!(
+            save_free_monthly_drugs_dispensed_core(&conn, &free(None, 1, Some(10), Some(1001), "2026-08", 5.0), true).is_err(),
+            "Free clinic under an existing Free area total of the SAME area must be rejected"
+        );
+        assert_eq!(free_rows(&conn), 1, "the rejected clinic must not be stored");
+        // Reverse order on another month: clinic first, then the area total -> REJECTED.
+        save_free_monthly_drugs_dispensed_core(&conn, &free(None, 1, Some(10), Some(1002), "2026-09", 5.0), true).unwrap();
+        assert!(
+            save_free_monthly_drugs_dispensed_core(&conn, &free(None, 1, Some(10), None, "2026-09", 50.0), true).is_err(),
+            "Free area total under an existing Free clinic of the SAME area must be rejected"
+        );
+        // A clinic of a DIFFERENT area of the same branch is allowed.
+        save_free_monthly_drugs_dispensed_core(&conn, &free(None, 1, Some(11), Some(1003), "2026-09", 5.0), true).unwrap();
+        // A second clinic of the SAME area is allowed (clinics are siblings).
+        save_free_monthly_drugs_dispensed_core(&conn, &free(None, 1, Some(10), Some(1004), "2026-09", 5.0), true).unwrap();
+        assert_eq!(free_rows(&conn), 4);
+    }
+
+    // Test 12d: the same Area/Clinic rule inside the Supported table.
+    #[test]
+    fn test_12d_supported_area_and_clinic_same_area_rejected() {
+        let conn = test_db();
+        save_supported_monthly_drugs_dispensed_core(&conn, &supported(None, 1, Some(10), None, "2026-08", 50.0, 5.0, 0.0, 0.0), true).unwrap();
+        assert!(
+            save_supported_monthly_drugs_dispensed_core(&conn, &supported(None, 1, Some(10), Some(1001), "2026-08", 5.0, 1.0, 0.0, 0.0), true).is_err(),
+            "Supported clinic under an existing Supported area total of the SAME area must be rejected"
+        );
+        save_supported_monthly_drugs_dispensed_core(&conn, &supported(None, 1, Some(10), Some(1002), "2026-09", 5.0, 1.0, 0.0, 0.0), true).unwrap();
+        assert!(
+            save_supported_monthly_drugs_dispensed_core(&conn, &supported(None, 1, Some(10), None, "2026-09", 50.0, 5.0, 0.0, 0.0), true).is_err(),
+            "Supported area total under an existing Supported clinic of the SAME area must be rejected"
+        );
+        save_supported_monthly_drugs_dispensed_core(&conn, &supported(None, 1, Some(11), Some(1003), "2026-09", 5.0, 1.0, 0.0, 0.0), true).unwrap();
+        save_supported_monthly_drugs_dispensed_core(&conn, &supported(None, 1, Some(10), Some(1004), "2026-09", 5.0, 1.0, 0.0, 0.0), true).unwrap();
+        assert_eq!(sup_rows(&conn), 4);
+    }
+
+    // Test 12e: the guard must not block a row from matching ITSELF, so editing an
+    // existing area total (or clinic row) still works.
+    #[test]
+    fn test_12e_area_and_clinic_rows_update_without_self_conflict() {
+        let conn = test_db();
+        let area_id_row = save_free_monthly_drugs_dispensed_core(&conn, &free(None, 1, Some(10), None, "2026-08", 50.0), true).unwrap();
+        let updated = save_free_monthly_drugs_dispensed_core(&conn, &free(Some(area_id_row), 1, Some(10), None, "2026-08", 77.0), false).unwrap();
+        assert_eq!(updated, area_id_row, "updating the same area row must not be blocked by the new self-check");
+        let got = get_free_monthly_drugs_dispensed_core(&conn, 1, Some(10), None, "2026-08").unwrap().unwrap();
+        assert_eq!(got.drugs_free_authority, 77.0);
+
+        let clinic_row = save_supported_monthly_drugs_dispensed_core(&conn, &supported(None, 1, Some(10), Some(1001), "2026-08", 50.0, 5.0, 0.0, 0.0), true).unwrap();
+        let clinic_updated = save_supported_monthly_drugs_dispensed_core(&conn, &supported(Some(clinic_row), 1, Some(10), Some(1001), "2026-08", 88.0, 8.0, 0.0, 0.0), false).unwrap();
+        assert_eq!(clinic_updated, clinic_row, "updating the same clinic row must not be blocked by the new self-check");
+        assert_eq!(sup_rows(&conn), 1);
+    }
+
+    // Test 12f: the rule is table-scoped — a Supported area total must not block a
+    // Free clinic of the same area+month, and vice versa.
+    #[test]
+    fn test_12f_area_clinic_rule_is_table_scoped() {
+        let conn = test_db();
+        save_supported_monthly_drugs_dispensed_core(&conn, &supported(None, 1, Some(10), None, "2026-08", 50.0, 5.0, 0.0, 0.0), true).unwrap();
+        save_free_monthly_drugs_dispensed_core(&conn, &free(None, 1, Some(10), Some(1001), "2026-08", 5.0), true).unwrap();
+        assert_eq!(free_rows(&conn), 1, "a Free clinic must coexist with a Supported area total of the same area");
+        assert_eq!(sup_rows(&conn), 1);
+    }
+
     // Test 14 (PHASE 5): The final schema has NO legacy monthly_drugs_dispensed table.
     // The new commands run against the split tables, and the legacy table simply does
     // not exist in the schema at all.
