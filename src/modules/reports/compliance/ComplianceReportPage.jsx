@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import PageHeader from '../../../components/ui/PageHeader';
 import Breadcrumb from '../../../components/ui/Breadcrumb';
 import Card from '../../../components/ui/Card';
 import Button from '../../../components/ui/Button';
 import ExportMenu from '../../../components/ui/ExportMenu';
+import useReportPrintShortcut from '../../../hooks/useReportPrintShortcut';
 import PrintableTable from '../../../components/common/PrintableTable';
 import { useToast } from '../../../components/ui/Toast';
 import invoke from '../../../api/tauriApi';
@@ -47,6 +48,8 @@ const ComplianceReportPage = () => {
   const [loading, setLoading] = useState(false);
   const [filterScore, setFilterScore] = useState('all'); // 'all' | 'full' | 'partial' | 'none'
   const [searchTerm, setSearchTerm] = useState('');
+  const exportMenuRef = useRef(null);
+  useReportPrintShortcut(exportMenuRef);
 
   const handleGenerate = async () => {
     setLoading(true);
@@ -81,29 +84,38 @@ const ComplianceReportPage = () => {
     });
   }, [data, filterScore, searchTerm]);
 
+  const branchCols = useMemo(() => [
+    { header: 'الفرع', accessor: 'branch_name' },
+    { header: 'إجمالي العيادات', accessor: 'total_clinics' },
+    { header: 'أدوية تفصيلي', accessor: 'clinics_drugs' },
+    { header: 'منصرف شهري', accessor: 'clinics_monthly' },
+    { header: 'إنسولين', accessor: 'clinics_insulin' },
+    { header: 'تذاكر', accessor: 'clinics_tickets' },
+    { header: 'مستلزمات', accessor: 'clinics_supplies' },
+    { header: 'نسبة الامتثال %', accessor: r => r.overall_pct.toFixed(1) },
+  ], []);
+  const clinicCols = useMemo(() => [
+    { header: 'العيادة', accessor: 'clinic_name' },
+    { header: 'المنطقة', accessor: 'area_name' },
+    { header: 'الفرع', accessor: 'branch_name' },
+    { header: 'أدوية تفصيلي', accessor: r => r.has_drugs ? 'نعم' : 'لا' },
+    { header: 'منصرف شهري', accessor: r => r.has_monthly ? 'نعم' : 'لا' },
+    { header: 'إنسولين', accessor: r => r.has_insulin ? 'نعم' : 'لا' },
+    { header: 'تذاكر', accessor: r => r.has_tickets ? 'نعم' : 'لا' },
+    { header: 'مستلزمات', accessor: r => r.has_supplies ? 'نعم' : 'لا' },
+    { header: 'الدرجة', accessor: 'score' },
+  ], []);
+
+  const previewTables = useMemo(() => {
+    if (!data) return undefined;
+    return [
+      { data: data.branches, columns: branchCols, title: 'إحصاء الفروع' },
+      { data: filteredClinics, columns: clinicCols, title: 'تفاصيل العيادات' },
+    ];
+  }, [data, filteredClinics, branchCols, clinicCols]);
+
   const handlePremiumExport = async (type, { options }) => {
     if (!data) return false;
-    const branchCols = [
-      { header: 'الفرع', accessor: 'branch_name' },
-      { header: 'إجمالي العيادات', accessor: 'total_clinics' },
-      { header: 'أدوية تفصيلي', accessor: 'clinics_drugs' },
-      { header: 'منصرف شهري', accessor: 'clinics_monthly' },
-      { header: 'إنسولين', accessor: 'clinics_insulin' },
-      { header: 'تذاكر', accessor: 'clinics_tickets' },
-      { header: 'مستلزمات', accessor: 'clinics_supplies' },
-      { header: 'نسبة الامتثال %', accessor: r => r.overall_pct.toFixed(1) },
-    ];
-    const clinicCols = [
-      { header: 'العيادة', accessor: 'clinic_name' },
-      { header: 'المنطقة', accessor: 'area_name' },
-      { header: 'الفرع', accessor: 'branch_name' },
-      { header: 'أدوية تفصيلي', accessor: r => r.has_drugs ? 'نعم' : 'لا' },
-      { header: 'منصرف شهري', accessor: r => r.has_monthly ? 'نعم' : 'لا' },
-      { header: 'إنسولين', accessor: r => r.has_insulin ? 'نعم' : 'لا' },
-      { header: 'تذاكر', accessor: r => r.has_tickets ? 'نعم' : 'لا' },
-      { header: 'مستلزمات', accessor: r => r.has_supplies ? 'نعم' : 'لا' },
-      { header: 'الدرجة', accessor: 'score' },
-    ];
     const exportOptions = {
       ...options,
       title: `تقرير الامتثال بالإدخال - ${month}`,
@@ -113,14 +125,16 @@ const ComplianceReportPage = () => {
     if (type === 'excel') {
       await exportMultiSheetExcel({
         'إحصاء الفروع': { data: data.branches, columns: branchCols, options: exportOptions },
-        'تفاصيل العيادات': { data: data.missing_clinics, columns: clinicCols, options: exportOptions },
+        // Respect the on-screen clinic filters (score + search) — export the
+        // same rows the page displays, not the full unfiltered set.
+        'تفاصيل العيادات': { data: filteredClinics, columns: clinicCols, options: exportOptions },
       }, { fileName: exportOptions.fileName, title: exportOptions.title });
       return true;
     }
     // Word/PDF: mirror the Excel sheets as separate titled tables
     const multiTables = [
       { data: data.branches, columns: branchCols, title: 'إحصاء الفروع' },
-      { data: data.missing_clinics, columns: clinicCols, title: 'تفاصيل العيادات' },
+      { data: filteredClinics, columns: clinicCols, title: 'تفاصيل العيادات' },
     ];
     const wordPdfOptions = { ...exportOptions, tables: multiTables };
     if (type === 'word') { exportToWord(data.branches, branchCols, wordPdfOptions); return true; }
@@ -139,10 +153,11 @@ const ComplianceReportPage = () => {
         actions={
           data && (
             <ExportMenu
-              data={data}
-              columns={[]}
+              ref={exportMenuRef}
+              data={data.branches}
+              columns={branchCols}
               onCustomExport={handlePremiumExport}
-              options={{ title: `تقرير الامتثال - ${month}`, fileName: `compliance_${month}` }}
+              options={{ title: `تقرير الامتثال - ${month}`, fileName: `compliance_${month}`, tables: previewTables, month: month, subtitle: `شهر التقرير: ${month}` }}
             />
           )
         }
@@ -308,11 +323,11 @@ const ComplianceReportPage = () => {
                         <td className="p-3 font-bold">{c.clinic_name}</td>
                         <td className="p-3 text-[var(--color-text-muted)]">{c.area_name}</td>
                         <td className="p-3 text-[var(--color-text-muted)]">{c.branch_name}</td>
-                        <td className="p-3 text-center"><Check v={c.has_drugs} /></td>
-                        <td className="p-3 text-center"><Check v={c.has_monthly} /></td>
-                        <td className="p-3 text-center"><Check v={c.has_insulin} /></td>
-                        <td className="p-3 text-center"><Check v={c.has_tickets} /></td>
-                        <td className="p-3 text-center"><Check v={c.has_supplies} /></td>
+                        <td className="p-3 text-center"><span className="no-print"><Check v={c.has_drugs} /></span><span className="only-print">{c.has_drugs ? 'نعم' : 'لا'}</span></td>
+                        <td className="p-3 text-center"><span className="no-print"><Check v={c.has_monthly} /></span><span className="only-print">{c.has_monthly ? 'نعم' : 'لا'}</span></td>
+                        <td className="p-3 text-center"><span className="no-print"><Check v={c.has_insulin} /></span><span className="only-print">{c.has_insulin ? 'نعم' : 'لا'}</span></td>
+                        <td className="p-3 text-center"><span className="no-print"><Check v={c.has_tickets} /></span><span className="only-print">{c.has_tickets ? 'نعم' : 'لا'}</span></td>
+                        <td className="p-3 text-center"><span className="no-print"><Check v={c.has_supplies} /></span><span className="only-print">{c.has_supplies ? 'نعم' : 'لا'}</span></td>
                         <td className="p-3 text-center"><ScoreBadge score={c.score} /></td>
                       </tr>
                     ))}
