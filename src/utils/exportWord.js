@@ -49,8 +49,12 @@ export const exportToWord = (data, columns, options = {}) => {
   const sigManager = signatures?.managerName || '';
   const sigApproval = signatures?.approvalNumber || '';
 
-  const tablesHtml = tables
-    ? tables.map(t => buildTableHtml(t.data, t.columns, t.title)).join('\n')
+  // An empty array is truthy but carries no tables — treat it as "no
+  // multi-tables" and fall back to the single-table path (mirrors the
+  // exportToPDF length guard), so the document never has a blank body.
+  const effectiveTables = tables && tables.length > 0 ? tables : null;
+  const tablesHtml = effectiveTables
+    ? effectiveTables.map(t => buildTableHtml(t.data, t.columns, t.title)).join('\n')
     : buildTableHtml(data, columns);
 
   const chartHtml = options.chartImage
@@ -129,5 +133,7 @@ export const exportToWord = (data, columns, options = {}) => {
   `;
 
   const blob = new Blob(['\ufeff', html], { type: 'application/msword;charset=utf-8' });
-  saveFileWithDialog(blob, `${fileName}_${timestamp()}.doc`, 'Word Files (*.doc)', 'doc');
+  // Propagate the save result (true = saved, false = dialog cancelled).
+  // Async dialog under the hood: callers must await the returned promise.
+  return saveFileWithDialog(blob, `${fileName}_${timestamp()}.doc`, 'Word Files (*.doc)', 'doc');
 };

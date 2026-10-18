@@ -115,8 +115,17 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
           columns,
           options: enhancedOptions,
         });
-        if (handled) {
+        // Save-result contract (D9.3): true = saved (toast); 'cancelled' =
+        // user cancelled the save dialog (silent, and NO built-in fallback —
+        // a save already ran); false = not handled (fall through to the
+        // built-in export below, legacy behavior); anything else
+        // (undefined/unknown) = silent, no fallback (a save may have started).
+        if (handled === true) {
           toast.success(`تم تصدير ملف ${type === 'excel' ? 'Excel' : type === 'word' ? 'Word' : 'PDF'} بنجاح ✅`);
+          setExporting(null);
+          return;
+        }
+        if (handled !== false) {
           setExporting(null);
           return;
         }
@@ -198,7 +207,9 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
             },
           };
 
-          await exportMultiSheetExcel(sheetsData, {
+          // Success toast only on confirmed save: false (dialog cancelled)
+          // and unknown results stay silent, real errors throw below.
+          const excelSaved = await exportMultiSheetExcel(sheetsData, {
             fileName: enhancedOptions.fileName || 'report',
             title: enhancedOptions.title || 'تقرير',
             chartImage: chartImage || enhancedOptions.chartImage || null,
@@ -207,23 +218,27 @@ const ExportMenuInner = ({ data = [], columns = [], options = {}, disabled = fal
               rows: summaryRows,
             },
           });
-          toast.success('تم تصدير ملف Excel بنجاح ✅');
+          if (excelSaved === true) toast.success('تم تصدير ملف Excel بنجاح ✅');
           break;
         }
-        case 'word':
-          exportToWord(data, columns, {
+        case 'word': {
+          // exportToWord resolves with the save result (true/false).
+          const wordSaved = await exportToWord(data, columns, {
             ...enhancedOptions,
             chartImage: chartImage || enhancedOptions.chartImage || null,
           });
-          toast.success('تم تصدير ملف Word بنجاح ✅');
+          if (wordSaved === true) toast.success('تم تصدير ملف Word بنجاح ✅');
           break;
-        case 'pdf':
-          await exportToPDF(data, columns, {
+        }
+        case 'pdf': {
+          // exportToPDF resolves with the save result (true/false).
+          const pdfSaved = await exportToPDF(data, columns, {
             ...enhancedOptions,
             chartImage: chartImage || enhancedOptions.chartImage || null,
           });
-          toast.success('تم تصدير ملف PDF بنجاح ✅');
+          if (pdfSaved === true) toast.success('تم تصدير ملف PDF بنجاح ✅');
           break;
+        }
         default:
           break;
       }

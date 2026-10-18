@@ -251,7 +251,9 @@ export const exportToExcel = async (data, columns, options = {}) => {
   brandCell.alignment = { horizontal: 'center' };
 
   const buffer = await workbook.xlsx.writeBuffer();
-  await saveFileWithDialog(buffer, `${fileName}_${timestamp()}.xlsx`, 'Excel Files (*.xlsx)', 'xlsx');
+  // Propagate the save result (true = saved, false = dialog cancelled) so
+  // callers can tell cancel apart from success. Never throws for cancel.
+  return saveFileWithDialog(buffer, `${fileName}_${timestamp()}.xlsx`, 'Excel Files (*.xlsx)', 'xlsx');
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -461,5 +463,7 @@ export const exportMultiSheetExcel = async (sheetsData, globalOptions = {}) => {
   }
 
   const buffer = await workbook.xlsx.writeBuffer();
-  await saveFileWithDialog(buffer, `${fileName}_${timestamp()}.xlsx`, 'Excel Files (*.xlsx)', 'xlsx');
+  // Propagate the save result (true = saved, false = dialog cancelled) so
+  // callers can tell cancel apart from success. Never throws for cancel.
+  return saveFileWithDialog(buffer, `${fileName}_${timestamp()}.xlsx`, 'Excel Files (*.xlsx)', 'xlsx');
 };
