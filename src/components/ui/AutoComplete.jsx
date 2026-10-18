@@ -112,12 +112,15 @@ const AutoComplete = ({
   }, [onChange, getOptionValue, getOptionLabel]);
 
   // ── Clear selection ─────────────────────────────────────────────────────
+  // NOTE: no input.focus() here on purpose. Focusing would reopen the
+  // dropdown in the same tick, and open() would reseed the box from the
+  // still-stale selection (parent state updates are batched), resurrecting
+  // the cleared label. The user reopens with one click on fresh state.
   const clear = useCallback((e) => {
     e.stopPropagation();
     onChange('');
     setSearchQuery('');
     setIsOpen(false);
-    inputRef.current?.focus();
   }, [onChange]);
 
   // ── Keyboard handling ───────────────────────────────────────────────────

@@ -1062,7 +1062,10 @@ const TemporalAnalysisHub = () => {
         <div className="flex-1 max-w-xl">
           <AutoComplete
             value={activeReport}
-            onChange={(id) => { if (id) { setActiveReport(id); setData([]); setActiveFilter('all'); } }}
+            // Clearing (X / typed erase) passes '' — reset the selection itself.
+            // Never fall back to a default report here, or the cleared name
+            // reappears in the box via AutoComplete's derived display value.
+            onChange={(id) => { setActiveReport(id); setData([]); setActiveFilter('all'); }}
             options={REPORT_TYPES}
             getOptionLabel={(r) => r.label}
             getOptionValue={(r) => r.id}
