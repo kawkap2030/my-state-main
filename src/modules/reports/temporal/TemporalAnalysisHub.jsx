@@ -916,6 +916,9 @@ const TemporalAnalysisHub = () => {
         console.error('Failed to capture chart:', err);
       }
     }
+    // Save outcome of whichever format branch below runs (true = saved,
+    // false/unknown = cancelled: silent, no built-in fallback export).
+    let saved = false;
     if (format === 'excel') {
       // Use multi-sheet export with summary + chart
       const reportLabel = REPORT_TYPES.find(r => r.id === activeReport)?.label || '';
@@ -936,7 +939,7 @@ const TemporalAnalysisHub = () => {
       const sheetsData = {
         'التقرير الرئيسي': { data, columns, options: exportOpts },
       };
-      await exportMultiSheetExcel(sheetsData, {
+      saved = await exportMultiSheetExcel(sheetsData, {
         fileName: options.fileName || 'temporal_' + activeReport,
         title: options.title || 'التحليل الزمني - ' + reportLabel,
         periodLabel: periodStr,
@@ -964,12 +967,12 @@ const TemporalAnalysisHub = () => {
         endMonth: range.end,
         subtitle: options.subtitle || `الجهة: ${getEntityName()} | ${periodStr}`
       };
-      if (format === 'word') await exportToWord(data, columns, exportOpts);
-      else if (format === 'pdf') await exportToPDF(data, columns, exportOpts);
+      if (format === 'word') saved = await exportToWord(data, columns, exportOpts);
+      else if (format === 'pdf') saved = await exportToPDF(data, columns, exportOpts);
       else return false;
     }
 
-    return true;
+    return saved === true ? true : 'cancelled';
   };
 
   return (

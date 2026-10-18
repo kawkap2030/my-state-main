@@ -132,12 +132,12 @@ const JudicialAnalyticsPage = () => {
       };
 
       if (type === 'excel') {
-        await exportMultiSheetExcel({
+        const excelSaved = await exportMultiSheetExcel({
           'كبار المرضى': { data: patientRows, columns: patientCols, options: exportOptions },
           'التشخيصات': { data: diagRows, columns: diagCols, options: exportOptions },
           'الاستمرارية': { data: contRows, columns: contCols, options: exportOptions },
         }, { fileName: 'judicial_analytics', title: 'تحليل الأحكام القضائية' });
-        return true;
+        return excelSaved === true ? true : 'cancelled';
       }
       // Word/PDF: mirror the Excel sheets as separate titled tables
       const multiTables = [
@@ -146,8 +146,8 @@ const JudicialAnalyticsPage = () => {
         { data: contRows, columns: contCols, title: 'الاستمرارية' },
       ];
       const wordPdfOptions = { ...exportOptions, tables: multiTables };
-      if (type === 'word') { exportToWord(patientRows, patientCols, wordPdfOptions); return true; }
-      if (type === 'pdf') { await exportToPDF(patientRows, patientCols, wordPdfOptions); return true; }
+      if (type === 'word') { const wordSaved = await exportToWord(patientRows, patientCols, wordPdfOptions); return wordSaved === true ? true : 'cancelled'; }
+      if (type === 'pdf') { const pdfSaved = await exportToPDF(patientRows, patientCols, wordPdfOptions); return pdfSaved === true ? true : 'cancelled'; }
       return false;
     } catch (e) {
       toast.error(`فشل التصدير: ${e.message || e}`);

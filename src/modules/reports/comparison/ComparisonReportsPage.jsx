@@ -228,7 +228,7 @@ const ComparisonReportsPage = () => {
           'مقارنة الفترات': { data, columns, options: finalOptions },
         };
         const periodLabel = options.subtitle || '';
-        await exportMultiSheetExcel(sheetsData, {
+        const excelSaved = await exportMultiSheetExcel(sheetsData, {
           fileName: finalOptions.fileName || 'comparison_report',
           title: finalOptions.title || 'تقرير المقارنة الزمنية',
           chartImage,
@@ -242,20 +242,23 @@ const ComparisonReportsPage = () => {
             ],
           },
         });
-        toast.success('تم تصدير ملف Excel بنجاح ✅');
+        if (excelSaved === true) return true;
+        return 'cancelled';
       } else if (type === 'word') {
-        exportToWord(data, columns, finalOptions);
-        toast.success('تم تصدير ملف Word بنجاح ✅');
+        const wordSaved = await exportToWord(data, columns, finalOptions);
+        if (wordSaved === true) return true;
+        return 'cancelled';
       } else if (type === 'pdf') {
-        await exportToPDF(data, columns, finalOptions);
-        toast.success('تم تصدير ملف PDF بنجاح ✅');
+        const pdfSaved = await exportToPDF(data, columns, finalOptions);
+        if (pdfSaved === true) return true;
+        return 'cancelled';
       }
     } catch (err) {
       console.error('Export error:', err);
       toast.error(`فشل التصدير: ${err.message || err}`);
     }
     
-    return true; // Indicate that we handled the export
+    return false; // Unknown type — let ExportMenu decide
   };
 
   const columns = useMemo(() => {

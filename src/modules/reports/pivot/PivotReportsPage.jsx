@@ -686,13 +686,13 @@ const PivotReportsPage = () => {
         'معلومات التقرير': { data: summaryRows, columns: summaryCols, options: exportOptions },
         'بيانات التقرير المحوري': { data: rowsFormatted, columns: columnsConfig, options: exportOptions }
       };
-      await exportMultiSheetExcel(sheetsData, {
+      const excelSaved = await exportMultiSheetExcel(sheetsData, {
         fileName: exportOptions.fileName,
         title: exportOptions.title,
         periodLabel: periodText,
         hierarchyLabel: hierarchyText
       });
-      return true;
+      return excelSaved === true ? true : 'cancelled';
     }
     // Word/PDF: mirror the Excel sheets as separate titled tables
     const multiTables = [
@@ -701,12 +701,12 @@ const PivotReportsPage = () => {
     ];
     const wordPdfOptions = { ...exportOptions, tables: multiTables };
     if (type === 'word') {
-      exportToWord(summaryRows, summaryCols, wordPdfOptions);
-      return true;
+      const wordSaved = await exportToWord(summaryRows, summaryCols, wordPdfOptions);
+      return wordSaved === true ? true : 'cancelled';
     }
     if (type === 'pdf') {
-      await exportToPDF(summaryRows, summaryCols, wordPdfOptions);
-      return true;
+      const pdfSaved = await exportToPDF(summaryRows, summaryCols, wordPdfOptions);
+      return pdfSaved === true ? true : 'cancelled';
     }
     return false;
   };

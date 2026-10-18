@@ -146,7 +146,7 @@ const ReconciliationPage = () => {
         },
       };
 
-      await exportMultiSheetExcel(sheetsData, {
+      const excelSaved = await exportMultiSheetExcel(sheetsData, {
         fileName: `totals_${hierarchy.dispenseMonth}`,
         title: 'تقرير الإجماليات الموحدة',
         summaryData: {
@@ -160,7 +160,7 @@ const ReconciliationPage = () => {
           ]
         }
       });
-      return true;
+      return excelSaved === true ? true : 'cancelled';
     }
     return false;
   };

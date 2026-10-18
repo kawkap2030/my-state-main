@@ -123,13 +123,13 @@ const ComplianceReportPage = () => {
       subtitle: `شهر التقرير: ${month}`,
     };
     if (type === 'excel') {
-      await exportMultiSheetExcel({
+      const excelSaved = await exportMultiSheetExcel({
         'إحصاء الفروع': { data: data.branches, columns: branchCols, options: exportOptions },
         // Respect the on-screen clinic filters (score + search) — export the
         // same rows the page displays, not the full unfiltered set.
         'تفاصيل العيادات': { data: filteredClinics, columns: clinicCols, options: exportOptions },
       }, { fileName: exportOptions.fileName, title: exportOptions.title });
-      return true;
+      return excelSaved === true ? true : 'cancelled';
     }
     // Word/PDF: mirror the Excel sheets as separate titled tables
     const multiTables = [
@@ -137,8 +137,8 @@ const ComplianceReportPage = () => {
       { data: filteredClinics, columns: clinicCols, title: 'تفاصيل العيادات' },
     ];
     const wordPdfOptions = { ...exportOptions, tables: multiTables };
-    if (type === 'word') { exportToWord(data.branches, branchCols, wordPdfOptions); return true; }
-    if (type === 'pdf') { await exportToPDF(data.branches, branchCols, wordPdfOptions); return true; }
+    if (type === 'word') { const wordSaved = await exportToWord(data.branches, branchCols, wordPdfOptions); return wordSaved === true ? true : 'cancelled'; }
+    if (type === 'pdf') { const pdfSaved = await exportToPDF(data.branches, branchCols, wordPdfOptions); return pdfSaved === true ? true : 'cancelled'; }
     return false;
   };
 

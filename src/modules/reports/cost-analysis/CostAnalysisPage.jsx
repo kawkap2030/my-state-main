@@ -202,7 +202,10 @@ const CostAnalysisPage = () => {
            console.error('Failed to capture chart:', err);
         }
      }
-     if (format === 'excel') {
+      // Save outcome of whichever format branch runs (true = saved,
+      // false/unknown = cancelled: silent, no built-in fallback export).
+      let saved = false;
+      if (format === 'excel') {
         // Build summary data for multi-sheet export
         const totalCost = data.reduce((s, r) => {
           const val = parseFloat(String(r.cost || r.total_cost || 0).replace(/,/g, ''));
@@ -212,7 +215,7 @@ const CostAnalysisPage = () => {
           'التقرير الرئيسي': { data, columns, options: { ...options, chartImage } },
         };
         const summaryLabel = activeTab === 'breakdown' ? 'التكلفة حسب التصنيف' : 'أعلى الأصناف';
-        await exportMultiSheetExcel(sheetsData, {
+        saved = await exportMultiSheetExcel(sheetsData, {
           fileName: options.fileName || 'cost_analysis',
           title: options.title || 'تحليل التكلفة الشامل',
           chartImage,
@@ -227,11 +230,11 @@ const CostAnalysisPage = () => {
           },
         });
      }
-     else if (format === 'word') await exportToWord(data, columns, { ...options, chartImage });
-     else if (format === 'pdf') await exportToPDF(data, columns, { ...options, chartImage });
-     else return false; // Unknown format — let ExportMenu handle it
+      else if (format === 'word') saved = await exportToWord(data, columns, { ...options, chartImage });
+      else if (format === 'pdf') saved = await exportToPDF(data, columns, { ...options, chartImage });
+      else return false; // Unknown format — let ExportMenu handle it
 
-     return true;
+      return saved === true ? true : 'cancelled';
   };
 
   return (

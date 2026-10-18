@@ -280,12 +280,12 @@ const ExecutiveReportPage = () => {
         if (topInsulinRows.length > 0) {
           sheetsData['الإنسولين الأكثر استهلاكاً'] = { data: topInsulinRows, columns: topInsulinCols, options: exportOptions };
         }
-        await exportMultiSheetExcel(sheetsData, {
+        const excelSaved = await exportMultiSheetExcel(sheetsData, {
           fileName: 'executive_summary_report',
           title: 'التقرير التنفيذي الشامل والمفصل',
           chartImage
         });
-        return true;
+        return excelSaved === true ? true : 'cancelled';
       }
 
       // Word & PDF: mirror the Excel sheets as separate titled tables
@@ -297,12 +297,12 @@ const ExecutiveReportPage = () => {
       };
 
       if (type === 'word') {
-        exportToWord(summaryRows, exportColumns, unifiedOptions);
-        return true;
+        const wordSaved = await exportToWord(summaryRows, exportColumns, unifiedOptions);
+        return wordSaved === true ? true : 'cancelled';
       }
       if (type === 'pdf') {
-        await exportToPDF(summaryRows, exportColumns, unifiedOptions);
-        return true;
+        const pdfSaved = await exportToPDF(summaryRows, exportColumns, unifiedOptions);
+        return pdfSaved === true ? true : 'cancelled';
       }
       return false;
     } catch (e) {

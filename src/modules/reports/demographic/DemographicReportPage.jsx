@@ -269,22 +269,22 @@ const DemographicReportPage = () => {
           'ملخص الفئات الاجتماعية': { data: summaryExportRows, columns: summaryCols, options: exportOptions },
           'تفاصيل البيانات الشهرية': { data: exportRows, columns: exportColumns, options: exportOptions }
         };
-        await exportMultiSheetExcel(sheetsData, {
+        const excelSaved = await exportMultiSheetExcel(sheetsData, {
           fileName: 'demographic_dispense_report',
           title: 'تقرير توزيع المنصرف حسب الفئات المستفيدة',
           chartImage
         });
-        return true;
+        return excelSaved === true ? true : 'cancelled';
       }
       // Word/PDF: mirror the Excel sheets as separate titled tables
       const wordPdfOptions = { ...exportOptions, tables: multiTables };
       if (type === 'word') {
-        exportToWord(summaryExportRows, summaryCols, wordPdfOptions);
-        return true;
+        const wordSaved = await exportToWord(summaryExportRows, summaryCols, wordPdfOptions);
+        return wordSaved === true ? true : 'cancelled';
       }
       if (type === 'pdf') {
-        await exportToPDF(summaryExportRows, summaryCols, wordPdfOptions);
-        return true;
+        const pdfSaved = await exportToPDF(summaryExportRows, summaryCols, wordPdfOptions);
+        return pdfSaved === true ? true : 'cancelled';
       }
       return false;
     } catch (e) {

@@ -148,11 +148,11 @@ const DataQualityPage = () => {
       };
 
       if (type === 'excel') {
-        await exportMultiSheetExcel({
+        const excelSaved = await exportMultiSheetExcel({
           'جودة الشهور': { data: monthRows, columns: monthCols, options: exportOptions },
           'العيادات المفقودة': { data: missingRows, columns: missingCols, options: exportOptions },
         }, { fileName: 'data_quality_report', title: 'تقرير جودة البيانات' });
-        return true;
+        return excelSaved === true ? true : 'cancelled';
       }
       // Word/PDF: mirror the Excel sheets as separate titled tables
       const multiTables = [
@@ -160,8 +160,8 @@ const DataQualityPage = () => {
         { data: missingRows, columns: missingCols, title: 'العيادات المفقودة' },
       ];
       const wordPdfOptions = { ...exportOptions, tables: multiTables };
-      if (type === 'word') { exportToWord(monthRows, monthCols, wordPdfOptions); return true; }
-      if (type === 'pdf') { await exportToPDF(monthRows, monthCols, wordPdfOptions); return true; }
+      if (type === 'word') { const wordSaved = await exportToWord(monthRows, monthCols, wordPdfOptions); return wordSaved === true ? true : 'cancelled'; }
+      if (type === 'pdf') { const pdfSaved = await exportToPDF(monthRows, monthCols, wordPdfOptions); return pdfSaved === true ? true : 'cancelled'; }
       return false;
     } catch (e) {
       toast.error(`فشل التصدير: ${e.message || e}`);

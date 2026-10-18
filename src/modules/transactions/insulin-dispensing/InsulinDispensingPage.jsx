@@ -801,7 +801,7 @@ const InsulinDispensingPage = () => {
         summaryRows.push(['الشهر', exportOpts.month || exportOpts.monthLabel]);
       }
 
-      await exportMultiSheetExcel(sheetsData, {
+      const excelSaved = await exportMultiSheetExcel(sheetsData, {
         fileName: exportOpts.fileName || `insulin_dispensing_${hierarchy.dispenseMonth}`,
         title: exportOpts.title || 'سجلات صرف الأنسولين',
         hierarchyLabel: exportOpts.hierarchyLabel,
@@ -811,7 +811,7 @@ const InsulinDispensingPage = () => {
         },
       });
 
-      return true;
+      return excelSaved === true ? true : 'cancelled';
     }
 
     if (type === 'pdf') {
@@ -822,8 +822,8 @@ const InsulinDispensingPage = () => {
       if (subsidizedRecords.length > 0) tables.push({ data: subsidizedRecords, columns: cols, title: 'المدعم' });
       if (freeRecords.length > 0) tables.push({ data: freeRecords, columns: cols, title: 'المجاني' });
       if (tables.length === 0) tables.push({ data, columns: cols, title: exportOpts.title || 'سجلات صرف الأنسولين' });
-      await exportToPDF(data, cols, { ...exportOpts, tables });
-      return true;
+      const pdfSaved = await exportToPDF(data, cols, { ...exportOpts, tables });
+      return pdfSaved === true ? true : 'cancelled';
     }
 
     if (type === 'word') {
@@ -834,8 +834,8 @@ const InsulinDispensingPage = () => {
       if (subsidizedRecords.length > 0) tables.push({ data: subsidizedRecords, columns: cols, title: 'المدعم' });
       if (freeRecords.length > 0) tables.push({ data: freeRecords, columns: cols, title: 'المجاني' });
       if (tables.length === 0) tables.push({ data, columns: cols, title: exportOpts.title || 'سجلات صرف الأنسولين' });
-      await exportToWord(data, cols, { ...exportOpts, tables });
-      return true;
+      const wordSaved = await exportToWord(data, cols, { ...exportOpts, tables });
+      return wordSaved === true ? true : 'cancelled';
     }
 
     return false;

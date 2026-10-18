@@ -365,9 +365,9 @@ const DrugsReportPage = () => {
             ]
           }
         };
-        await exportMultiSheetExcel(sheetsData, globalOptions);
-        toast.success('تم تصدير ملف Excel بنجاح');
-        return true;
+        const excelSaved = await exportMultiSheetExcel(sheetsData, globalOptions);
+        if (excelSaved === true) return true;
+        return 'cancelled';
       }
       // Build multi-table data for Word/PDF: summary table + detail table
       const summaryTable = {
@@ -387,14 +387,14 @@ const DrugsReportPage = () => {
       const wordPdfOptions = { ...enrichedOptions, tables: multiTables };
 
       if (type === 'word') {
-        await exportToWord(data, exportColumns, wordPdfOptions);
-        toast.success('تم تصدير ملف Word بنجاح');
-        return true;
+        const wordSaved = await exportToWord(data, exportColumns, wordPdfOptions);
+        if (wordSaved === true) return true;
+        return 'cancelled';
       }
       if (type === 'pdf') {
-        await exportToPDF(data, exportColumns, wordPdfOptions);
-        toast.success('تم تصدير ملف PDF بنجاح');
-        return true;
+        const pdfSaved = await exportToPDF(data, exportColumns, wordPdfOptions);
+        if (pdfSaved === true) return true;
+        return 'cancelled';
       }
       return false;
     } catch (err) {

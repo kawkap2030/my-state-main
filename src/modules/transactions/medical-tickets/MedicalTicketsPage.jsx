@@ -1619,14 +1619,14 @@ const MedicalTicketsPage = () => {
             ]
           }
         };
-        await exportMultiSheetExcel(sheetsData, globalOptions);
-        toast.success('تم تصدير Excel بنجاح');
-        return true;
+        const excelSavedMed = await exportMultiSheetExcel(sheetsData, globalOptions);
+        if (excelSavedMed === true) return true;
+        return 'cancelled';
       }
             const activeData = tableViewMode === 'supported' ? supportedData : ownedData;
       const activeCols = tableViewMode === 'supported' ? supportedExportColumns : ownedExportColumns;
-      if (type === 'word') { await exportToWord(activeData.length > 0 ? activeData : exportData, activeCols, wordPdfOptions); toast.success('تم تصدير Word بنجاح'); return true; }
-      if (type === 'pdf') { await exportToPDF(activeData.length > 0 ? activeData : exportData, activeCols, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
+      if (type === 'word') { const wordSavedMed = await exportToWord(activeData.length > 0 ? activeData : exportData, activeCols, wordPdfOptions); if (wordSavedMed === true) return true; return 'cancelled'; }
+      if (type === 'pdf') { const pdfSavedMed = await exportToPDF(activeData.length > 0 ? activeData : exportData, activeCols, wordPdfOptions); if (pdfSavedMed === true) return true; return 'cancelled'; }
       return false;
     } catch (err) { console.error(err); return false; }
   };

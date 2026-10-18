@@ -308,9 +308,9 @@ const SupportedDrugsReportPage = () => {
           },
           chartImage
         };
-        await exportMultiSheetExcel(sheetsData, globalOptions);
-        toast.success('تم تصدير Excel بنجاح');
-        return true;
+        const excelSaved = await exportMultiSheetExcel(sheetsData, globalOptions);
+        if (excelSaved === true) return true;
+        return 'cancelled';
       }
       // Word/PDF: summary table + detail table (like the premium Excel export)
       const summaryTable = {
@@ -327,8 +327,8 @@ const SupportedDrugsReportPage = () => {
       };
       const multiTables = [summaryTable, { data: tableData, columns: cols, title: 'تفاصيل الأدوية المدعمة' }];
       const wordPdfOptions = { ...enrichedOptions, tables: multiTables };
-      if (type === 'word') { await exportToWord(tableData, cols, wordPdfOptions); toast.success('تم تصدير Word بنجاح'); return true; }
-      if (type === 'pdf') { await exportToPDF(tableData, cols, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
+      if (type === 'word') { const wordSaved = await exportToWord(tableData, cols, wordPdfOptions); if (wordSaved === true) return true; return 'cancelled'; }
+      if (type === 'pdf') { const pdfSaved = await exportToPDF(tableData, cols, wordPdfOptions); if (pdfSaved === true) return true; return 'cancelled'; }
       return false;
     } catch (err) { console.error(err); return false; }
   };

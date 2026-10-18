@@ -422,12 +422,12 @@ const TicketsReportPage = () => {
             ]
           }
         };
-        await exportMultiSheetExcel(sheetsData, globalOptions);
-        toast.success('تم تصدير Excel بنجاح');
-        return true;
+        const excelSaved = await exportMultiSheetExcel(sheetsData, globalOptions);
+        if (excelSaved === true) return true;
+        return 'cancelled';
       }
-      if (type === 'word') { await exportToWord(exportData, columns, wordPdfOptions); toast.success('تم تصدير Word بنجاح'); return true; }
-      if (type === 'pdf') { await exportToPDF(exportData, columns, wordPdfOptions); toast.success('تم تصدير PDF بنجاح'); return true; }
+      if (type === 'word') { const wordSaved = await exportToWord(exportData, columns, wordPdfOptions); if (wordSaved === true) return true; return 'cancelled'; }
+      if (type === 'pdf') { const pdfSaved = await exportToPDF(exportData, columns, wordPdfOptions); if (pdfSaved === true) return true; return 'cancelled'; }
       return false;
     } catch (err) { console.error(err); return false; }
   };

@@ -299,8 +299,8 @@ const AnomalyDetectionPage = () => {
           }
         };
 
-        await exportMultiSheetExcel(sheetsData, globalOptions);
-        return true;
+        const excelSaved = await exportMultiSheetExcel(sheetsData, globalOptions);
+        return excelSaved === true ? true : 'cancelled';
       }
 
       // Word & PDF: reuse the same preview tables (identical rows/columns).
@@ -317,12 +317,12 @@ const AnomalyDetectionPage = () => {
         : exportOptions;
 
       if (type === 'word') {
-        exportToWord(outRows, outlierColsDef, wordPdfOptions);
-        return true;
+        const wordSaved = await exportToWord(outRows, outlierColsDef, wordPdfOptions);
+        return wordSaved === true ? true : 'cancelled';
       }
       if (type === 'pdf') {
-        await exportToPDF(outRows, outlierColsDef, wordPdfOptions);
-        return true;
+        const pdfSaved = await exportToPDF(outRows, outlierColsDef, wordPdfOptions);
+        return pdfSaved === true ? true : 'cancelled';
       }
 
       return false;

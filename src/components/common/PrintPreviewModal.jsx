@@ -388,7 +388,9 @@ const PrintPreviewModal = ({
               if (pdfExporting) return;
               setPdfExporting(true);
               try {
-                await exportToPDF(exportData, exportColumns, {
+                // Success toast only on confirmed save: dialog cancel (false)
+                // and unknown results stay silent, real errors throw below.
+                const pdfSaved = await exportToPDF(exportData, exportColumns, {
                   title,
                   subtitle,
                   hierarchyLabel,
@@ -400,7 +402,7 @@ const PrintPreviewModal = ({
                   signatures: mergedSignatures,
                   ...(tables && tables.length > 0 ? { tables } : {}),
                 });
-                toast.success('تم تصدير التقرير كـ PDF بنجاح ✅');
+                if (pdfSaved === true) toast.success('تم تصدير التقرير كـ PDF بنجاح ✅');
               } catch (err) {
                 toast.error(`فشل تصدير PDF: ${err.message || err}`);
               } finally {

@@ -44,6 +44,29 @@ const TABLE_LABELS = {
   patient_pdfs: "ملفات PDF للمرضى",
 };
 
+// Central CSV cell encoder (RFC 4180 + formula-injection guard).
+// - Wraps fields containing , " newline in double quotes (inner quotes doubled).
+// - Prefixes text starting with = + - @ (after leading spaces/control chars)
+//   with a single quote, unless it is a plain number (e.g. -5 stays numeric).
+const csvCell = (v) => {
+  let s = v == null ? "" : String(v);
+  if (s === "") return "";
+  // First meaningful char: skip spaces/BOM/C0 controls — a trigger hiding
+  // behind them still counts (checked via char codes, no control-regex).
+  let i = 0;
+  while (i < s.length) {
+    const c = s.charCodeAt(i);
+    if (c === 0xfeff || c <= 0x20) { i += 1; continue; }
+    break;
+  }
+  const first = s.charAt(i);
+  const trigger = first !== "" && "=+-@".indexOf(first) !== -1;
+  const plainNum = /^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(s.trim());
+  if (trigger && !plainNum) s = "'" + s;
+  if (/[",\n\r]/.test(s) || s.charAt(0) === "'") s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+};
+
 const AuditLogPage = () => {
   const toast = useToast();
   const [logs, setLogs] = useState([]);
@@ -154,9 +177,9 @@ const AuditLogPage = () => {
       l.timestamp, l.username || "—", l.action,
       TABLE_LABELS[l.table_name] || l.table_name,
       l.record_id || "—",
-      (l.details || "").replace(/,/g, "؛"),
+      l.details || "",
     ]);
-    const csvContent = "\uFEFF" + [headers, ...rows].map((r) => r.join(",")).join("\n");
+    const csvContent = "\uFEFF" + [headers, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -235,12 +258,14 @@ const AuditLogPage = () => {
         },
       };
 
-      await exportMultiSheetExcel(sheetsData, {
+      // Success toast only on confirmed save: dialog cancel (false)
+      // stays silent, real errors throw to the catch below.
+      const excelSaved = await exportMultiSheetExcel(sheetsData, {
         fileName: `audit_log_${new Date().toISOString().substring(0, 10)}`,
         title: 'سجل التدقيق والمراجعة',
         summaryData,
       });
-      toast.success('تم تصدير ملف Excel بنجاح ✅');
+      if (excelSaved === true) toast.success('تم تصدير ملف Excel بنجاح ✅');
     } catch (err) {
       toast.error(`فشل التصدير: ${err.message || err}`);
     }
